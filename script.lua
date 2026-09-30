@@ -8,7 +8,7 @@ end)
 
 local v2 = {
     API = "http://38.92.41.52:3000",
-    TOKEN = "73fa12c47459fed3724e505c",
+    TOKEN = "<NOVO_TOKEN>",
     WORKER = "ravenactxx",
     INTERVALO = 4,
     v3 = 45,
@@ -1620,6 +1620,24 @@ local ReplicatedStorage2 =
         "ReplicatedStorage"
     )
 
+local function OBTER_MAIN_REMOTE()
+    local MainRemote =
+        ReplicatedStorage2:FindFirstChild(
+            "MainRemote",
+            true
+        )
+
+    if MainRemote
+        and MainRemote:IsA(
+            "RemoteEvent"
+        ) then
+
+        return MainRemote
+    end
+
+    return nil
+end
+
 local function ITEM_DATABASE()
     local v14x =
         ReplicatedStorage2:FindFirstChild(
@@ -2121,16 +2139,21 @@ local function COLETAR_INVENTARIO()
             local id =
                 tostring(
                     card:GetAttribute(
+                        "ItemId"
+                    )
+                    or card:GetAttribute(
                         "itemId"
                     )
                     or ""
                 )
 
             if id:match(
-                "^H[A-Za-z0-9_-]+$"
+                "^[HG][A-Za-z0-9_-]+$"
             )
                 and id ~= "H0000"
-                and id ~= "H0001" then
+                and id ~= "H0001"
+                and id ~= "G0000"
+                and id ~= "G0001" then
 
                 local quantidade =
                     QUANTIDADE(
@@ -3184,61 +3207,62 @@ local function v139(v96)
         .. tostring(v96)
     )
 
-    local OK, v135 =
-        v133()
+    local v103 =
+        v95(v96)
 
-    if not OK then
+    if not v103 then
+        DEBUG(
+            "Cliente não encontrado para enviar trade"
+        )
+
         return false,
-            v135
+            "cliente não está neste servidor"
     end
 
-    local v138 =
-        v90(
-            6,
-            function()
-                return v137(v96)
-            end
-        )
+    local MainRemote =
+        OBTER_MAIN_REMOTE()
 
-    if not v138 then
+    if not MainRemote then
         DEBUG(
-            "Cliente NÃO apareceu na lista"
+            "MainRemote NÃO encontrado"
         )
 
         return false,
-            "cliente não apareceu na lista de trades"
-    end
-
-    local v105 =
-        v138:FindFirstChild(
-            "TradeButton"
-        )
-
-    if not v105
-        or not v102(v105) then
-
-        DEBUG(
-            "TradeButton indisponível"
-        )
-
-        return false,
-            "cliente está indisponível para receber trade"
+            "MainRemote não encontrado"
     end
 
     DEBUG(
-        "TradeButton encontrado"
+        "Enviando pedido de trade para UserId "
+        .. tostring(
+            v103.UserId
+        )
     )
 
-    local v140, v141 =
-        v109(v105)
+    local Enviou,
+        ErroEnvio =
+        pcall(function()
+            MainRemote:FireServer(
+                "SendTradeRequest",
+                v103.UserId
+            )
+        end)
 
-    if not v140 then
+    if not Enviou then
+        DEBUG(
+            "Falha ao enviar pedido: "
+            .. tostring(
+                ErroEnvio
+            )
+        )
+
         return false,
-            v141
+            tostring(
+                ErroEnvio
+            )
     end
 
     DEBUG(
-        "TradeButton clicado, aguardando janela"
+        "Pedido de trade enviado"
     )
 
     local v136 =
@@ -3460,40 +3484,66 @@ local function v158(
             "nenhum item restante para colocar na oferta"
     end
 
-    local CliquesOK = 0
+    local MainRemote =
+        OBTER_MAIN_REMOTE()
+
+    if not MainRemote then
+        DEBUG(
+            "MainRemote NÃO encontrado"
+        )
+
+        return nil,
+            nil,
+            "MainRemote não encontrado"
+    end
+
+    local codigos = {}
 
     for _, Tentativa in ipairs(
         Tentativas
     ) do
 
-        if Tentativa.card
-            and Tentativa.card.Parent then
-
-            local OK =
-                v113(
-                    Tentativa.card
-                )
-
-            if OK then
-                CliquesOK += 1
-            end
-        end
+        table.insert(
+            codigos,
+            Tentativa.ftfId
+        )
     end
 
     DEBUG(
-        "Cliques nos itens: "
-        .. tostring(CliquesOK)
-        .. "/"
+        "Enviando oferta via MainRemote: "
         .. tostring(
-            #Tentativas
+            #codigos
         )
+        .. " item(ns)"
     )
 
-    if CliquesOK <= 0 then
+    local Enviou,
+        ErroEnvio =
+        pcall(function()
+            MainRemote:FireServer(
+                "SendMyTradeOffer",
+                codigos
+            )
+        end)
+
+    if not Enviou then
+        DEBUG(
+            "Falha ao enviar oferta: "
+            .. tostring(
+                ErroEnvio
+            )
+        )
+
         return nil,
             nil,
-            "não consegui clicar nos itens da oferta"
+            tostring(
+                ErroEnvio
+            )
     end
+
+    DEBUG(
+        "Oferta enviada via MainRemote"
+    )
 
     task.wait(
         v2.v10
@@ -4062,51 +4112,46 @@ local function v182(v81)
                         or "não consegui preparar a oferta"
                 end
 
-                local Accept =
-                    v99(
-                        v159,
-                        "Body",
-                        "OfferFrame",
-                        "AcceptButton"
-                    )
+                local MainRemote =
+                    OBTER_MAIN_REMOTE()
 
-                if not Accept then
+                if not MainRemote then
                     DEBUG(
-                        "AcceptButton NÃO encontrado"
+                        "MainRemote NÃO encontrado para aceitar"
                     )
 
                     return false,
-                        "AcceptButton não encontrado"
+                        "MainRemote não encontrado"
                 end
 
                 DEBUG(
-                    "AcceptButton encontrado"
-                )
-
-                DEBUG(
-                    "Clicando AcceptButton..."
+                    "Aceitando trade via MainRemote..."
                 )
 
                 local AcceptOK,
                     v188 =
-                    v109(
-                        Accept
-                    )
+                    pcall(function()
+                        MainRemote:FireServer(
+                            "AcceptTradeOffer"
+                        )
+                    end)
 
                 if not AcceptOK then
                     DEBUG(
-                        "Falha ao clicar AcceptButton: "
+                        "Falha ao aceitar trade: "
                         .. tostring(
                             v188
                         )
                     )
 
                     return false,
-                        v188
+                        tostring(
+                            v188
+                        )
                 end
 
                 DEBUG(
-                    "AcceptButton clicado"
+                    "AcceptTradeOffer enviado"
                 )
 
                 local v189 =
