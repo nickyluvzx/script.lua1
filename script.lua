@@ -2976,8 +2976,76 @@ local function v133()
         )
 
     if not v105 then
+        v105 =
+            v99(
+                v100(),
+                "MenusTabFrame",
+                "tradeMenuButton"
+            )
+    end
+
+    if not v105 then
+        local function procurar(
+            pasta
+        )
+            for _, objeto in ipairs(
+                pasta:GetChildren()
+            ) do
+
+                if objeto:IsA(
+                    "GuiButton"
+                ) then
+
+                    local nome =
+                        string.lower(
+                            tostring(
+                                objeto.Name
+                            )
+                        )
+
+                    if string.find(
+                        nome,
+                        "trademenu"
+                    )
+                        or string.find(
+                            nome,
+                            "trade"
+                        ) then
+
+                        return objeto
+                    end
+                end
+
+                if objeto:IsA(
+                    "GuiObject"
+                )
+                    or objeto:IsA(
+                        "ScreenGui"
+                    ) then
+
+                    local encontrado =
+                        procurar(
+                            objeto
+                        )
+
+                    if encontrado then
+                        return encontrado
+                    end
+                end
+            end
+
+            return nil
+        end
+
+        v105 =
+            procurar(
+                PlayerGui
+            )
+    end
+
+    if not v105 then
         DEBUG(
-            "tradeMenuButton NÃO encontrado"
+            "Nenhum botão de trade encontrado"
         )
 
         return false,
@@ -2985,11 +3053,16 @@ local function v133()
     end
 
     DEBUG(
-        "tradeMenuButton encontrado"
+        "Botão encontrado: "
+        .. tostring(
+            v105:GetFullName()
+        )
     )
 
     local OK, v135 =
-        v109(v105)
+        v109(
+            v105
+        )
 
     if not OK then
         return false,
@@ -3001,16 +3074,28 @@ local function v133()
             5,
             function()
 
-                local v65 =
+                local lista =
                     v99(
                         v100(),
                         "TradeListMenuWindow"
                     )
 
-                if v65
-                    and v102(v65) then
+                if lista
+                    and v102(lista) then
 
-                    return v65
+                    return lista
+                end
+
+                local lista2 =
+                    v99(
+                        v101(),
+                        "TradeListMenuWindow"
+                    )
+
+                if lista2
+                    and v102(lista2) then
+
+                    return lista2
                 end
 
                 return nil
@@ -3033,7 +3118,6 @@ local function v133()
     return true,
         v136
 end
-
 local function v137(v96)
     local v65 =
         v99(
