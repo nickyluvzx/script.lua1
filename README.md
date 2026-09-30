@@ -1715,7 +1715,6 @@ local function v133()
         DEBUG(
             "TradePopUpWindow está bloqueando"
         )
-
         return false,
             "há uma solicitação de trade recebida bloqueando a interface"
     end
@@ -1759,20 +1758,21 @@ local function v133()
         return false, v135
     end
 
-    local v65 =
-        v99(
-            v100(),
-            "TradeListMenuWindow"
-        )
-
     local v136 =
         v90(
             5,
             function()
-                return
-                    v65
-                    and v102(v65)
-                    and v65
+                local v65 =
+                    v99(
+                        v100(),
+                        "TradeListMenuWindow"
+                    )
+
+                if v65 and v102(v65) then
+                    return v65
+                end
+
+                return nil
             end
         )
 
@@ -1789,6 +1789,7 @@ local function v133()
 
     return true, v136
 end
+
 
 local function v137(v96)
     local v65 =
