@@ -1623,8 +1623,7 @@ local ReplicatedStorage2 =
 local function OBTER_MAIN_REMOTE()
     local MainRemote =
         ReplicatedStorage2:FindFirstChild(
-            "MainRemote",
-            true
+            "RemoteEvent"
         )
 
     if MainRemote
