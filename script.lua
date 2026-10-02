@@ -13,11 +13,11 @@ local v2 = {
     INTERVALO = 4,
     v3 = 45,
     v4 = 90,
-    v5 = 5,
+    v5 = 2,
     v6 = 0.12,
     v7 = 1.25,
     v8 = 0.015,
-    v10 = 1.6,
+    v10 = 2.5,
     v11 = 10
 }
 
@@ -3600,9 +3600,95 @@ local function v158(
     )
 
     if v169 <= 0 then
+        DEBUG(
+            "Nenhum item entrou na oferta; tentando novamente..."
+        )
+
+        local RetryOK,
+            RetryError =
+            pcall(function()
+                MainRemote:FireServer(
+                    "SendMyTradeOffer",
+                    codigos
+                )
+            end)
+
+        if not RetryOK then
+            DEBUG(
+                "Fallback da oferta falhou: "
+                .. tostring(
+                    RetryError
+                )
+            )
+
+            return nil,
+                nil,
+                tostring(
+                    RetryError
+                )
+        end
+
+        task.wait(
+            0.5
+        )
+
+        v168 = {}
+        v169 = 0
+
+        for v167, v24 in pairs(
+            EstadoPorChave
+        ) do
+            local Depois =
+                v124(
+                    v162,
+                    v24.fingerprint
+                )
+
+            local Entrou =
+                math.max(
+                    0,
+                    Depois
+                    - (
+                        tonumber(
+                            v24.before
+                        )
+                        or 0
+                    )
+                )
+
+            Entrou =
+                math.min(
+                    Entrou,
+                    tonumber(
+                        v24.requested
+                    )
+                    or 0
+                )
+
+            if Entrou > 0 then
+                v168[v167] = {
+                    key = v167,
+                    ftfId = v24.ftfId,
+                    name = v24.name,
+                    quantity = Entrou
+                }
+
+                v169 += Entrou
+            end
+        end
+
+        DEBUG(
+            "Itens após fallback: "
+            .. tostring(
+                v169
+            )
+        )
+    end
+
+    if v169 <= 0 then
         return nil,
             nil,
-            "nenhum item entrou na oferta depois do burst"
+            "nenhum item entrou na oferta depois do fallback"
     end
 
     return v168,
@@ -4400,6 +4486,13 @@ local function v196()
             DEBUG(
                 "Pedido recebido da API"
             )
+
+            if not v81.nick then
+                v81.nick =
+                    v81.username
+                    or v81.playerName
+                    or v81.robloxUsername
+            end
 
             if v81.orderId then
                 DEBUG(
