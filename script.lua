@@ -1,4763 +1,2721 @@
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
+--[[
+===============================================================================
+   FARM + GUARDA  v3.13                para Delta Executor        (MM2)
+===============================================================================
+   AQUI TEM TUDO JUNTO:
+     [FARM]   mapeia TODAS as moedas validas do mapa e escolhe a melhor:
+              perto de voce e LONGE do murder (moeda na area do murder perde
+              pontos). Marca de vermelho com linha, voa atravessando
+              parede/chao, encosta, confirma e vai pra proxima.
+     [GUARDA] murder fica verde neon; se chegar perto, sai DISPARADO pra
+              longe (70 studs/s, arranque imediato) e nao volta a farmar
+              enquanto ele nao afastar de verdade.
+     [ESTATICO] com o farm desligado, o personagem fica travado no lugar
+              (de pe se estiver no chao, flutuando se estiver no ar). Era isso
+              que faltava pra ele nao descer pra baixo do mapa.
+     [BOLSA]  a bolsa do MM2 e 50 moedas. Chegou em 50, ele RESETA o
+              personagem pra esvaziar e volta a farmar.
+              - SE VOCE FOR O MURDER: continua FARMANDO normalmente, mas
+                quando a bolsa enche ele NAO reseta: fica ESTATICO onde
+                estiver, esperando a partida acabar.
+     [SEM MOEDA] sem moeda no mapa NAO e bolsa cheia: e intervalo entre
+              partidas / lobby. Fica parado esperando, sem resetar.
+              Morreu, mataram ou a partida acabou? A proxima vida comeca com
+              a bolsa vazia - sem reset nenhum.
+     [LOBBY x PARTIDA] o lobby tem as moedas do mapa no Workspace, mas elas
+              estao longe e/ou invisiveis. Ele so farma quando detecta partida
+              de verdade: faca do murder, arma do xerife, ou moeda valida
+              dentro de CONFIG.distanciaMaxima. Fora disso, fica parado.
+     [TELEPORTE DO SERVIDOR] no lobby ele NAO trava o personagem (trava no
+              lobby impede o servidor de te teleportar pro mapa). E a trava,
+              quando usada em partida, solta sozinha se o servidor te mover.
 
-local v1 = nil
-pcall(function()
-    v1 = game:GetService("VirtualInputManager")
-end)
+   UI PENSADA PRA CELULAR (botao grande, sem depender de teclado):
+     AUTO FARM: LIGAR / DESLIGAR
+     GUARDA:    LIGAR / DESLIGAR
+     RESETAR BOLSA
+     velocidade - / +
 
-local v2 = {
-    API = "http://38.92.41.52:3000",
-    TOKEN = "<NOVO_TOKEN>",
-    WORKER = "ravenactxx",
-    INTERVALO = 4,
-    v3 = 45,
-    v4 = 90,
-    v5 = 2,
-    v6 = 0.12,
-    v7 = 1.25,
-    v8 = 0.015,
-    v10 = 2.5,
-    v11 = 10
+   ATALHOS (PC):  RightShift = farm    F2 = guarda    F3 = painel
+
+   AVISOS:
+     * automatizar o MM2 viola os Termos de Uso da Roblox - risco de ban e seu
+     * o reset mata o seu personagem (Humanoid.Health = 0) pra renascer e
+       limpar a bolsa. Como murder isso NUNCA acontece (ele fica estatico)
+     * se o jogo mudar o nome das moedas/faca, ajuste padroesNome/padroesFaca
+===============================================================================
+]]
+
+--=============================================================================
+-- 1) CONFIGURACAO
+--=============================================================================
+local CONFIG = {
+	-- ---- FARM ----
+	velocidade         = 30,    -- studs/s (16 = andar)
+	variacaoVelocidade = 0.15,
+	alturaAproximacao  = 2.5,
+	esperaColeta       = 0.2,
+	retentativas       = 1,
+	cooldownColeta     = 10,
+	tempoSemMoeda      = 25,    -- s sem moeda = intervalo/lobby (NAO reseta)
+	distanciaMaxima    = 250,   -- moeda mais longe que isso e de outro mapa/lobby
+	limiteTeleporte    = 40,    -- pulo maior que isso = o servidor teleportou
+	capacidadeBolsa    = 50,    -- bolsa do MM2 = 50 moedas
+	zerarBolsaAoRenascer = false, -- nao zera a bolsa ao renascer (a conta segue)
+	tempoLobby         = 5,     -- s fora de partida = partida acabou, zera a bolsa
+	graceColeta        = 2.5,   -- s pra confirmar moeda que demora pra sumir
+	resetEspera        = 6,     -- s esperando o respawn depois do reset
+
+	-- ---- GUARDA ----
+	distanciaPerigo    = 45,
+	distanciaPerigoCega = 15,   -- sem visao, so foge se estiver colado
+	usarVisao          = true,  -- parede no meio = nao foge
+	alturaPerigo       = 12,    -- diferenca de altura maxima pra contar como perto
+	raioPerigoMoeda    = 60,    -- moeda dentro disso do murder perde pontos
+	pesoMoedaLongeMurder = 3,   -- quanto mais longe do murder, melhor a nota
+	distanciaFuga      = 65,    -- dispara pra longe (sem atravessar o mapa)
+	subidaFuga         = 10,
+	velocidadeFuga     = 70,    -- studs/s (sai disparado, nao passeia)
+	corNeon            = Color3.fromRGB(0, 255, 90),
+	mostrarTag         = true,
+
+	-- ---- GERAL ----
+	usarNoclip         = true,
+	estatico           = true,
+	exigirCaraDeMoeda  = true,  -- so aceita moeda com CoinVisual/CoinContainer
+	usarContadorJogo   = true,  -- usa o contador de moedas do jogo, se achar
+	debugRemotes       = false, -- mostra no F9 os remotes de moeda (diagnostico)
+	antiAfk            = true,
+	mostrarPainel      = true,
+	padroesNome        = { "coin", "coins", "moeda", "moedas", "cash", "money" },
+	padroesFaca        = { "knife", "faca", "dagger", "murder" },
+	padroesArma        = { "gun", "pistol", "revolver", "sheriff" },
+	teclaFarm          = Enum.KeyCode.RightShift,
+	teclaGuarda        = Enum.KeyCode.F2,
+	teclaPainel        = Enum.KeyCode.F3,
 }
 
-print("[KyanStore] INICIO")
+--=============================================================================
+-- 2) SERVICOS E HELPERS
+--=============================================================================
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local StarterGui       = game:GetService("StarterGui")
+local Workspace        = game:GetService("Workspace")
+local RunService       = game:GetService("RunService")
 
-local v12 = nil
-
-while Players.LocalPlayer == nil do
-    task.wait(1)
+local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+	task.wait(0.2)
+	LocalPlayer = Players.LocalPlayer
+end
+if not game:IsLoaded() then
+	game.Loaded:Wait()
 end
 
-v12 = Players.LocalPlayer
-
-print("[KyanStore] LocalPlayer: " .. tostring(v12.Name))
-
-local PlayerGui = v12:WaitForChild("PlayerGui")
-
-local v13 = false
-local v14 = {}
-
-local DEBUG_LINES = {}
-
-local function DEBUG(msg)
-    msg = tostring(msg)
-    local linha = os.date("%H:%M:%S") .. " | " .. msg
-    print("[KYAN DEBUG] " .. linha)
-
-    table.insert(DEBUG_LINES, linha)
-
-    if #DEBUG_LINES > 15 then
-        table.remove(DEBUG_LINES, 1)
-    end
-
-    if v14.DebugText then
-        v14.DebugText.Text =
-            table.concat(DEBUG_LINES, "\n")
-    end
+local function safe(fn, ...)
+	local ok, a = pcall(fn, ...)
+	if ok then
+		return a
+	end
+	return nil
 end
 
-local function v15(v16)
-    local v17 =
-        getcustomasset
-        or getsynasset
-
-    local v18 =
-        request
-        or http_request
-        or (syn and syn.request)
-        or (fluxus and fluxus.request)
-
-    if not v17
-        or not v18
-        or not writefile then
-        return nil
-    end
-
-    local v19 = "KyanStoreAssets"
-    local v20 = v19 .. "/" .. v16
-
-    pcall(function()
-        if makefolder
-            and (not isfolder or not isfolder(v19)) then
-            makefolder(v19)
-        end
-    end)
-
-    local v21 = false
-
-    if isfile then
-        pcall(function()
-            v21 = isfile(v20)
-        end)
-    end
-
-    if not v21 then
-        local v22, v23 =
-            pcall(function()
-                return v18({
-                    Url = v2.API .. "/assets/" .. v16,
-                    Method = "GET"
-                })
-            end)
-
-        if v22 and v23 then
-            local v24 =
-                tonumber(
-                    v23.StatusCode
-                    or v23.Status
-                    or 0
-                )
-
-            if v24 >= 200
-                and v24 < 300
-                and v23.Body
-                and #v23.Body > 0 then
-
-                pcall(function()
-                    writefile(v20, v23.Body)
-                end)
-            end
-        end
-    end
-
-    local v25 = true
-
-    if isfile then
-        pcall(function()
-            v25 = isfile(v20)
-        end)
-    end
-
-    if not v25 then
-        return nil
-    end
-
-    local v22, v26 =
-        pcall(function()
-            return v17(v20)
-        end)
-
-    return v22 and v26 or nil
-end
-
-local function v27(v28, v29)
-    local v30 = Instance.new("UICorner")
-    v30.CornerRadius =
-        UDim.new(0, v29 or 10)
-    v30.Parent = v28
-
-    return v30
-end
-
-local function v31(v28, v32, v33, v34)
-    local v35 = Instance.new("UIStroke")
-    v35.Color =
-        v32
-        or Color3.fromRGB(210, 20, 45)
-
-    v35.Thickness =
-        v33
-        or 1
-
-    v35.Transparency =
-        v34
-        or 0
-
-    v35.Parent = v28
-
-    return v35
-end
-
-local function v36(
-    v28,
-    v37,
-    v38,
-    v39,
-    v40,
-    v41
-)
-    local v42 =
-        Instance.new("TextLabel")
-
-    v42.BackgroundTransparency = 1
-    v42.Size = v38
-    v42.Position = v39
-    v42.Text = v37 or ""
-
-    v42.TextColor3 =
-        Color3.fromRGB(
-            240,
-            236,
-            240
-        )
-
-    v42.Font =
-        v41
-        and Enum.Font.GothamBold
-        or Enum.Font.Gotham
-
-    v42.TextSize =
-        v40
-        or 14
-
-    v42.TextXAlignment =
-        Enum.TextXAlignment.Left
-
-    v42.TextYAlignment =
-        Enum.TextYAlignment.Center
-
-    v42.Parent = v28
-
-    return v42
-end
-
-do
-    local okUI, errUI =
-        pcall(function()
-
-        local antigo =
-            PlayerGui:FindFirstChild(
-                "KyanStoreDeliveryStatus"
-            )
-
-        if antigo then
-            antigo:Destroy()
-        end
-
-        local v43 =
-            Instance.new("ScreenGui")
-
-        v43.Name =
-            "KyanStoreDeliveryStatus"
-
-        v43.ResetOnSpawn = false
-        v43.IgnoreGuiInset = true
-        v43.DisplayOrder = 999
-        v43.ZIndexBehavior =
-            Enum.ZIndexBehavior.Sibling
-
-        v43.Parent = PlayerGui
-
-        local v44 =
-            Instance.new("Frame")
-
-        v44.Name = "Panel"
-        v44.AnchorPoint =
-            Vector2.new(0.5, 0.5)
-
-        v44.Size =
-            UDim2.fromOffset(
-                760,
-                500
-            )
-
-        v44.Position =
-            UDim2.fromScale(
-                0.5,
-                0.5
-            )
-
-        v44.BackgroundColor3 =
-            Color3.fromRGB(
-                12,
-                8,
-                11
-            )
-
-        v44.BorderSizePixel = 0
-        v44.Parent = v43
-
-        v27(v44, 16)
-
-        v31(
-            v44,
-            Color3.fromRGB(
-                215,
-                15,
-                42
-            ),
-            2,
-            0.08
-        )
-
-        local v45 =
-            Instance.new("UIGradient")
-
-        v45.Color =
-            ColorSequence.new({
-                ColorSequenceKeypoint.new(
-                    0,
-                    Color3.fromRGB(
-                        29,
-                        8,
-                        14
-                    )
-                ),
-
-                ColorSequenceKeypoint.new(
-                    0.55,
-                    Color3.fromRGB(
-                        12,
-                        8,
-                        11
-                    )
-                ),
-
-                ColorSequenceKeypoint.new(
-                    1,
-                    Color3.fromRGB(
-                        24,
-                        5,
-                        10
-                    )
-                )
-            })
-
-        v45.Rotation = 90
-        v45.Parent = v44
-
-        local v46 =
-            Instance.new("UIScale")
-
-        v46.Scale = 1
-        v46.Parent = v44
-
-        local function v47()
-            local camera =
-                workspace.CurrentCamera
-
-            if not camera then
-                return
-            end
-
-            local V =
-                camera.ViewportSize
-
-            v46.Scale =
-                math.clamp(
-                    math.min(
-                        (V.X - 28) / 760,
-                        (V.Y - 28) / 500
-                    ),
-                    0.50,
-                    1
-                )
-        end
-
-        v47()
-
-        if workspace.CurrentCamera then
-            workspace.CurrentCamera
-                :GetPropertyChangedSignal(
-                    "ViewportSize"
-                )
-                :Connect(v47)
-        end
-
-        local v49 =
-            Instance.new("ImageButton")
-
-        v49.Name = "Toggle"
-        v49.AnchorPoint =
-            Vector2.new(1, 0)
-
-        v49.Size =
-            UDim2.fromOffset(
-                62,
-                62
-            )
-
-        v49.Position =
-            UDim2.new(
-                1,
-                -18,
-                0,
-                18
-            )
-
-        v49.BackgroundColor3 =
-            Color3.fromRGB(
-                17,
-                9,
-                13
-            )
-
-        v49.AutoButtonColor = true
-        v49.Image =
-            v15("toggle_icon.png")
-            or ""
-
-        v49.ScaleType =
-            Enum.ScaleType.Crop
-
-        v49.ZIndex = 30
-        v49.Parent = v43
-
-        v27(v49, 12)
-
-        v31(
-            v49,
-            Color3.fromRGB(
-                230,
-                25,
-                50
-            ),
-            2,
-            0
-        )
-
-        if v49.Image == "" then
-            local v50 =
-                v36(
-                    v49,
-                    "KS",
-                    UDim2.fromScale(
-                        1,
-                        1
-                    ),
-                    UDim2.fromScale(
-                        0,
-                        0
-                    ),
-                    18,
-                    true
-                )
-
-            v50.TextXAlignment =
-                Enum.TextXAlignment.Center
-
-            v50.TextColor3 =
-                Color3.fromRGB(
-                    255,
-                    45,
-                    70
-                )
-
-            v50.ZIndex = 31
-        end
-
-        v49.MouseButton1Click:Connect(
-            function()
-                v44.Visible =
-                    not v44.Visible
-            end
-        )
-
-        local v51 =
-            Instance.new("ImageLabel")
-
-        v51.Name = "AnimatedDrip"
-
-        v51.Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                34
-            )
-
-        v51.Position =
-            UDim2.fromOffset(
-                0,
-                0
-            )
-
-        v51.BackgroundTransparency = 1
-        v51.ScaleType =
-            Enum.ScaleType.Stretch
-
-        v51.ZIndex = 8
-        v51.Parent = v44
-
-        local v52 =
-            v15(
-                "drip_red_spritesheet.png"
-            )
-
-        if v52 then
-            v51.Image = v52
-
-            v51.ImageRectSize =
-                Vector2.new(
-                    532,
-                    24
-                )
-
-            v51.ImageRectOffset =
-                Vector2.new(
-                    0,
-                    0
-                )
-
-            task.spawn(function()
-                local v53 = 0
-
-                while v43.Parent do
-                    v51.ImageRectOffset =
-                        Vector2.new(
-                            532 * v53,
-                            0
-                        )
-
-                    v53 =
-                        (v53 + 1) % 5
-
-                    task.wait(0.10)
-                end
-            end)
-        else
-            v51.Image = ""
-            v51.BackgroundTransparency = 0
-
-            v51.BackgroundColor3 =
-                Color3.fromRGB(
-                    190,
-                    8,
-                    28
-                )
-        end
-
-        local v54 =
-            Instance.new("Frame")
-
-        v54.Size =
-            UDim2.new(
-                1,
-                -32,
-                0,
-                142
-            )
-
-        v54.Position =
-            UDim2.fromOffset(
-                16,
-                24
-            )
-
-        v54.BackgroundColor3 =
-            Color3.fromRGB(
-                22,
-                9,
-                13
-            )
-
-        v54.BorderSizePixel = 0
-        v54.Parent = v44
-
-        v27(v54, 12)
-
-        v31(
-            v54,
-            Color3.fromRGB(
-                145,
-                15,
-                33
-            ),
-            1,
-            0.25
-        )
-
-        local v55 =
-            Instance.new("ImageLabel")
-
-        v55.Size =
-            UDim2.fromScale(
-                1,
-                1
-            )
-
-        v55.BackgroundTransparency = 1
-
-        v55.Image =
-            v15("banner.png")
-            or ""
-
-        v55.ScaleType =
-            Enum.ScaleType.Crop
-
-        v55.Parent = v54
-
-        v27(v55, 12)
-
-        if v55.Image == "" then
-            local v50 =
-                v36(
-                    v54,
-                    "KYAN STORE",
-                    UDim2.fromScale(
-                        1,
-                        1
-                    ),
-                    UDim2.fromScale(
-                        0,
-                        0
-                    ),
-                    38,
-                    true
-                )
-
-            v50.TextXAlignment =
-                Enum.TextXAlignment.Center
-
-            v50.TextColor3 =
-                Color3.fromRGB(
-                    230,
-                    20,
-                    48
-                )
-        end
-
-        local v56 =
-            Instance.new("Frame")
-
-        v56.Size =
-            UDim2.fromOffset(
-                246,
-                250
-            )
-
-        v56.Position =
-            UDim2.fromOffset(
-                16,
-                178
-            )
-
-        v56.BackgroundColor3 =
-            Color3.fromRGB(
-                24,
-                14,
-                18
-            )
-
-        v56.BackgroundTransparency =
-            0.12
-
-        v56.BorderSizePixel = 0
-        v56.Parent = v44
-
-        v27(v56, 12)
-
-        v31(
-            v56,
-            Color3.fromRGB(
-                115,
-                20,
-                35
-            ),
-            1,
-            0.25
-        )
-
-        local v57 =
-            v36(
-                v56,
-                "ENTREGA",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    32
-                ),
-                UDim2.fromOffset(
-                    12,
-                    10
-                ),
-                18,
-                true
-            )
-
-        v57.TextColor3 =
-            Color3.fromRGB(
-                255,
-                232,
-                236
-            )
-
-        local v58 =
-            v36(
-                v56,
-                "entrega automática pela kyan store",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    26
-                ),
-                UDim2.fromOffset(
-                    12,
-                    40
-                ),
-                12,
-                false
-            )
-
-        v58.TextColor3 =
-            Color3.fromRGB(
-                170,
-                150,
-                156
-            )
-
-        local v59 =
-            v36(
-                v56,
-                "nick do cliente",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    24
-                ),
-                UDim2.fromOffset(
-                    12,
-                    88
-                ),
-                13,
-                true
-            )
-
-        v59.TextColor3 =
-            Color3.fromRGB(
-                220,
-                205,
-                210
-            )
-
-        local v60 =
-            Instance.new("Frame")
-
-        v60.Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                50
-            )
-
-        v60.Position =
-            UDim2.fromOffset(
-                12,
-                116
-            )
-
-        v60.BackgroundColor3 =
-            Color3.fromRGB(
-                14,
-                11,
-                14
-            )
-
-        v60.BorderSizePixel = 0
-        v60.Parent = v56
-
-        v27(v60, 9)
-
-        v31(
-            v60,
-            Color3.fromRGB(
-                190,
-                15,
-                40
-            ),
-            1,
-            0.15
-        )
-
-        local v61 =
-            v36(
-                v60,
-                "-",
-                UDim2.new(
-                    1,
-                    -20,
-                    1,
-                    0
-                ),
-                UDim2.fromOffset(
-                    10,
-                    0
-                ),
-                17,
-                true
-            )
-
-        v61.TextColor3 =
-            Color3.fromRGB(
-                247,
-                240,
-                242
-            )
-
-        local v62 =
-            v36(
-                v56,
-                "status atual",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    22
-                ),
-                UDim2.fromOffset(
-                    12,
-                    184
-                ),
-                12,
-                true
-            )
-
-        v62.TextColor3 =
-            Color3.fromRGB(
-                175,
-                150,
-                158
-            )
-
-        local v24 =
-            v36(
-                v56,
-                "aguardando pedidos",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    30
-                ),
-                UDim2.fromOffset(
-                    12,
-                    208
-                ),
-                14,
-                true
-            )
-
-        v24.TextColor3 =
-            Color3.fromRGB(
-                255,
-                43,
-                67
-            )
-
-        local v63 =
-            Instance.new("Frame")
-
-        v63.Size =
-            UDim2.new(
-                1,
-                -294,
-                0,
-                250
-            )
-
-        v63.Position =
-            UDim2.fromOffset(
-                278,
-                178
-            )
-
-        v63.BackgroundColor3 =
-            Color3.fromRGB(
-                24,
-                14,
-                18
-            )
-
-        v63.BackgroundTransparency =
-            0.12
-
-        v63.BorderSizePixel = 0
-        v63.Parent = v44
-
-        v27(v63, 12)
-
-        v31(
-            v63,
-            Color3.fromRGB(
-                115,
-                20,
-                35
-            ),
-            1,
-            0.25
-        )
-
-        local v64 =
-            v36(
-                v63,
-                "ITENS DA ENTREGA",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    30
-                ),
-                UDim2.fromOffset(
-                    12,
-                    10
-                ),
-                17,
-                true
-            )
-
-        v64.TextColor3 =
-            Color3.fromRGB(
-                255,
-                232,
-                236
-            )
-
-        local Rolagem =
-            Instance.new(
-                "ScrollingFrame"
-            )
-
-        Rolagem.Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                116
-            )
-
-        Rolagem.Position =
-            UDim2.fromOffset(
-                12,
-                44
-            )
-
-        Rolagem.BackgroundColor3 =
-            Color3.fromRGB(
-                13,
-                10,
-                13
-            )
-
-        Rolagem.BorderSizePixel = 0
-        Rolagem.ScrollBarThickness = 4
-
-        Rolagem.ScrollBarImageColor3 =
-            Color3.fromRGB(
-                205,
-                20,
-                45
-            )
-
-        Rolagem.CanvasSize =
-            UDim2.new(
-                0,
-                0,
-                0,
-                0
-            )
-
-        Rolagem.AutomaticCanvasSize =
-            Enum.AutomaticSize.Y
-
-        Rolagem.Parent = v63
-
-        v27(Rolagem, 9)
-
-        v31(
-            Rolagem,
-            Color3.fromRGB(
-                100,
-                22,
-                34
-            ),
-            1,
-            0.35
-        )
-
-        local v65 =
-            v36(
-                Rolagem,
-                "-",
-                UDim2.new(
-                    1,
-                    -16,
-                    0,
-                    0
-                ),
-                UDim2.fromOffset(
-                    8,
-                    8
-                ),
-                13,
-                false
-            )
-
-        v65.AutomaticSize =
-            Enum.AutomaticSize.Y
-
-        v65.TextColor3 =
-            Color3.fromRGB(
-                232,
-                220,
-                224
-            )
-
-        v65.Font =
-            Enum.Font.Code
-
-        v65.TextWrapped = true
-
-        v65.TextYAlignment =
-            Enum.TextYAlignment.Top
-
-        local v66 =
-            v36(
-                v63,
-                "STATUS DA ENTREGA",
-                UDim2.new(
-                    1,
-                    -24,
-                    0,
-                    24
-                ),
-                UDim2.fromOffset(
-                    12,
-                    168
-                ),
-                14,
-                true
-            )
-
-        v66.TextColor3 =
-            Color3.fromRGB(
-                225,
-                212,
-                216
-            )
-
-        local v67 = {}
-
-        local v68 = {
-            "aguardando\npedidos",
-            "entrega\npendente",
-            "entregando\nmarretas",
-            "marretas\nentregues"
-        }
-
-        for i = 1, 4 do
-            local X =
-                12
-                + ((i - 1) * 105)
-
-            local v69 =
-                v36(
-                    v63,
-                    "●",
-                    UDim2.fromOffset(
-                        22,
-                        22
-                    ),
-                    UDim2.fromOffset(
-                        X,
-                        196
-                    ),
-                    20,
-                    true
-                )
-
-            v69.TextXAlignment =
-                Enum.TextXAlignment.Center
-
-            local v70 =
-                v36(
-                    v63,
-                    v68[i],
-                    UDim2.fromOffset(
-                        88,
-                        36
-                    ),
-                    UDim2.fromOffset(
-                        X + 24,
-                        188
-                    ),
-                    10,
-                    true
-                )
-
-            v70.TextWrapped = true
-
-            v70.TextColor3 =
-                Color3.fromRGB(
-                    135,
-                    125,
-                    130
-                )
-
-            v67[i] = {
-                v69 = v69,
-                v70 = v70
-            }
-        end
-
-        local v71 =
-            Instance.new("Frame")
-
-        v71.Size =
-            UDim2.new(
-                1,
-                -32,
-                0,
-                42
-            )
-
-        v71.Position =
-            UDim2.fromOffset(
-                16,
-                442
-            )
-
-        v71.BackgroundColor3 =
-            Color3.fromRGB(
-                160,
-                8,
-                31
-            )
-
-        v71.BorderSizePixel = 0
-        v71.Parent = v44
-
-        v27(v71, 10)
-
-        v31(
-            v71,
-            Color3.fromRGB(
-                245,
-                30,
-                60
-            ),
-            1,
-            0.05
-        )
-
-        local v72 =
-            v36(
-                v71,
-                "worker automático ativo • aguardando pedidos da api",
-                UDim2.new(
-                    1,
-                    -20,
-                    1,
-                    0
-                ),
-                UDim2.fromOffset(
-                    10,
-                    0
-                ),
-                13,
-                true
-            )
-
-        v72.TextXAlignment =
-            Enum.TextXAlignment.Center
-
-        v72.TextColor3 =
-            Color3.fromRGB(
-                255,
-                244,
-                246
-            )
-
-        local DebugFrame =
-            Instance.new("Frame")
-
-        DebugFrame.Name =
-            "DebugFrame"
-
-        DebugFrame.Size =
-            UDim2.fromOffset(
-                720,
-                250
-            )
-
-        DebugFrame.Position =
-            UDim2.fromOffset(
-                20,
-                180
-            )
-
-        DebugFrame.BackgroundColor3 =
-            Color3.fromRGB(
-                8,
-                8,
-                8
-            )
-
-        DebugFrame.BorderSizePixel = 0
-        DebugFrame.Visible = false
-        DebugFrame.ZIndex = 100
-        DebugFrame.Parent = v44
-
-        v27(DebugFrame, 10)
-
-        v31(
-            DebugFrame,
-            Color3.fromRGB(
-                255,
-                35,
-                60
-            ),
-            2,
-            0
-        )
-
-        local DebugTitle =
-            Instance.new("TextLabel")
-
-        DebugTitle.Size =
-            UDim2.new(
-                1,
-                -20,
-                0,
-                30
-            )
-
-        DebugTitle.Position =
-            UDim2.fromOffset(
-                10,
-                5
-            )
-
-        DebugTitle.BackgroundTransparency = 1
-
-        DebugTitle.Text =
-            "KYAN STORE • DEBUG"
-
-        DebugTitle.TextColor3 =
-            Color3.fromRGB(
-                255,
-                45,
-                70
-            )
-
-        DebugTitle.TextSize = 16
-        DebugTitle.Font =
-            Enum.Font.GothamBold
-
-        DebugTitle.TextXAlignment =
-            Enum.TextXAlignment.Left
-
-        DebugTitle.ZIndex = 101
-        DebugTitle.Parent = DebugFrame
-
-        local DebugText =
-            Instance.new("TextLabel")
-
-        DebugText.Name =
-            "DebugText"
-
-        DebugText.Size =
-            UDim2.new(
-                1,
-                -20,
-                1,
-                -40
-            )
-
-        DebugText.Position =
-            UDim2.fromOffset(
-                10,
-                38
-            )
-
-        DebugText.BackgroundTransparency = 1
-
-        DebugText.Text =
-            "Aguardando..."
-
-        DebugText.TextColor3 =
-            Color3.fromRGB(
-                230,
-                230,
-                230
-            )
-
-        DebugText.TextSize = 12
-        DebugText.Font =
-            Enum.Font.Code
-
-        DebugText.TextXAlignment =
-            Enum.TextXAlignment.Left
-
-        DebugText.TextYAlignment =
-            Enum.TextYAlignment.Top
-
-        DebugText.TextWrapped = false
-        DebugText.ZIndex = 101
-        DebugText.Parent = DebugFrame
-
-        local DebugButton =
-            Instance.new("TextButton")
-
-        DebugButton.Size =
-            UDim2.fromOffset(
-                100,
-                30
-            )
-
-        DebugButton.Position =
-            UDim2.new(
-                1,
-                -110,
-                0,
-                5
-            )
-
-        DebugButton.BackgroundColor3 =
-            Color3.fromRGB(
-                120,
-                10,
-                25
-            )
-
-        DebugButton.Text = "DEBUG"
-
-        DebugButton.TextColor3 =
-            Color3.fromRGB(
-                255,
-                255,
-                255
-            )
-
-        DebugButton.TextSize = 13
-
-        DebugButton.Font =
-            Enum.Font.GothamBold
-
-        DebugButton.ZIndex = 102
-        DebugButton.Parent = v44
-
-        v27(DebugButton, 7)
-
-        DebugButton.MouseButton1Click:Connect(
-            function()
-                DebugFrame.Visible =
-                    not DebugFrame.Visible
-            end
-        )
-
-        v14.v43 = v43
-        v14.v44 = v44
-        v14.v24 = v24
-        v14.v61 = v61
-        v14.v65 = v65
-        v14.v67 = v67
-        v14.v72 = v72
-        v14.DebugText = DebugText
-    end)
-
-    if not okUI then
-        warn(
-            "[KyanStore] erro UI: "
-            .. tostring(errUI)
-        )
-    else
-        print(
-            "[KyanStore] UI criada"
-        )
-    end
-end
-
-DEBUG("Script carregado")
-DEBUG(
-    "Jogador: "
-    .. tostring(v12.Name)
-)
-
-DEBUG(
-    "PlaceId: "
-    .. tostring(game.PlaceId)
-)
-
-local function v73(v74)
-    local v37 =
-        tostring(v74 or "-")
-
-    if v14.v24 then
-        v14.v24.Text = v37
-    end
-
-    DEBUG(
-        "STATUS => "
-        .. v37
-    )
-
-    local v75 = {
-        ["aguardando pedidos"] = 1,
-        ["entrega pendente"] = 2,
-        ["entregando marretas"] = 3,
-        ["marretas entregues"] = 4
-    }
-
-    local v76 =
-        v75[v37]
-
-    for i, v77 in ipairs(
-        v14.v67 or {}
-    ) do
-        local v78 =
-            v76
-            and i <= v76
-
-        local v79 =
-            v76
-            and i == v76
-
-        v77.v69.TextColor3 =
-            v78
-            and Color3.fromRGB(
-                255,
-                35,
-                62
-            )
-            or Color3.fromRGB(
-                92,
-                83,
-                88
-            )
-
-        v77.v70.TextColor3 =
-            v79
-            and Color3.fromRGB(
-                255,
-                45,
-                70
-            )
-            or (
-                v78
-                and Color3.fromRGB(
-                    215,
-                    185,
-                    192
-                )
-                or Color3.fromRGB(
-                    125,
-                    114,
-                    120
-                )
-            )
-    end
-end
-
-local function v80(v81)
-    if not v81 then
-        if v14.v61 then
-            v14.v61.Text = "-"
-        end
-
-        if v14.v65 then
-            v14.v65.Text = "-"
-        end
-
-        return
-    end
-
-    if v14.v61 then
-        v14.v61.Text =
-            tostring(
-                v81.nick
-                or "-"
-            )
-    end
-
-    local v82 = {}
-
-    for _, v83 in ipairs(
-        v81.items or {}
-    ) do
-        local v84 =
-            tonumber(
-                v83.quantity
-                or 0
-            )
-            or 0
-
-        if v84 > 0 then
-            table.insert(
-                v82,
-                string.format(
-                    "%dx  %s  [%s]",
-                    v84,
-                    tostring(
-                        v83.name
-                        or "item"
-                    ),
-                    tostring(
-                        v83.ftfId
-                        or "sem id"
-                    )
-                )
-            )
-        end
-    end
-
-    if v14.v65 then
-        v14.v65.Text =
-            #v82 > 0
-            and table.concat(
-                v82,
-                "\n"
-            )
-            or "-"
-    end
-end
-
-local function HTTP(
-    v85,
-    v20,
-    v86
-)
-    DEBUG(
-        "HTTP "
-        .. tostring(v85)
-        .. " "
-        .. tostring(v20)
-    )
-
-    local v87 =
-        request
-        or http_request
-        or (syn and syn.request)
-        or (fluxus and fluxus.request)
-
-    if not v87 then
-        DEBUG(
-            "ERRO: executor não possui request"
-        )
-
-        error(
-            "executor sem função request/http_request"
-        )
-    end
-
-    local ok, v23 =
-        pcall(function()
-            return v87({
-                Url =
-                    v2.API
-                    .. v20,
-
-                Method = v85,
-
-                Headers = {
-                    ["Authorization"] =
-                        "Bearer "
-                        .. v2.TOKEN,
-
-                    ["Content-Type"] =
-                        "application/json"
-                },
-
-                Body =
-                    v86
-                    and HttpService:JSONEncode(v86)
-                    or nil
-            })
-        end)
-
-    if not ok then
-        DEBUG(
-            "ERRO HTTP: "
-            .. tostring(v23)
-        )
-
-        error(v23)
-    end
-
-    local v24 =
-        tonumber(
-            v23.StatusCode
-            or v23.Status
-            or 0
-        )
-
-    DEBUG(
-        "HTTP STATUS => "
-        .. tostring(v24)
-    )
-
-    local v88 = nil
-
-    if v23.Body
-        and #v23.Body > 0 then
-
-        local v22, v89 =
-            pcall(function()
-                return HttpService:JSONDecode(
-                    v23.Body
-                )
-            end)
-
-        if v22 then
-            v88 = v89
-            DEBUG(
-                "HTTP possui JSON"
-            )
-        else
-            v88 = {
-                raw = v23.Body
-            }
-
-            DEBUG(
-                "HTTP retornou texto não-JSON"
-            )
-        end
-    else
-        DEBUG(
-            "HTTP sem Body"
-        )
-    end
-
-    return v88, v24
-end
-
-local ReplicatedStorage2 =
-    game:GetService(
-        "ReplicatedStorage"
-    )
-
-local function OBTER_MAIN_REMOTE()
-    local MainRemote =
-        ReplicatedStorage2:FindFirstChild(
-            "RemoteEvent"
-        )
-
-    if MainRemote
-        and MainRemote:IsA(
-            "RemoteEvent"
-        ) then
-
-        return MainRemote
-    end
-
-    return nil
-end
-
-local function ITEM_DATABASE()
-    local v14x =
-        ReplicatedStorage2:FindFirstChild(
-            "ReplicatedStorage"
-        )
-
-    if v14x
-        and v14x:FindFirstChild(
-            "ItemDatabase"
-        ) then
-
-        return v14x.ItemDatabase
-    end
-
-    return ReplicatedStorage2:FindFirstChild(
-        "ItemDatabase"
-    )
-end
-
-local function ITEM_GRID()
-    local pg =
-        v12:FindFirstChild(
-            "PlayerGui"
-        )
-
-    if not pg then
-        return nil
-    end
-
-    local menus =
-        pg:FindFirstChild(
-            "MenusScreenGui"
-        )
-
-    if not menus then
-        return nil
-    end
-
-    local janela =
-        menus:FindFirstChild(
-            "InventoryMenuWindow"
-        )
-        or menus:FindFirstChild(
-            "_InventoryMenuWindow"
-        )
-
-    if not janela then
-        return nil
-    end
-
-    local body =
-        janela:FindFirstChild(
-            "Body"
-        )
-
-    if not body then
-        return nil
-    end
-
-    return body:FindFirstChild(
-        "ItemGridFrame"
-    )
-end
-
-local function QUANTIDADE(card)
-    local top =
-        card:FindFirstChild(
-            "TopLabel"
-        )
-
-    if not top
-        or not top:IsA(
-            "TextLabel"
-        ) then
-        return 1
-    end
-
-    local texto =
-        tostring(
-            top.Text or ""
-        )
-
-    local n =
-        texto:match(
-            "[xX]%s*(%d+)"
-        )
-        or texto:match(
-            "(%d+)%s*[xX]"
-        )
-
-    return tonumber(n) or 1
-end
-
-local function EVENTO(id)
-    local codigo =
-        tostring(id):match(
-            "^[HG]([A-Za-z]+)%d+"
-        )
-
-    if not codigo then
-        return "default"
-    end
-
-    codigo =
-        string.lower(
-            codigo
-        )
-
-    local mapa = {
-        ani = "anniversary",
-        val = "valentines",
-        hal = "halloween",
-        mas = "christmas",
-        lny = "lunar_new_year",
-        spr = "spring",
-        sum = "summer",
-        aut = "autumn",
-        pat = "st_patricks",
-        eas = "easter",
-        lbc = "merch",
-        vip = "vip"
-    }
-
-    return mapa[codigo]
-        or codigo
-end
-
-local function CLICAR_BOTAO(btn)
-    if not btn
-        or not btn:IsA(
-            "GuiButton"
-        ) then
-
-        DEBUG(
-            "CLIQUE: botão inválido"
-        )
-
-        return false
-    end
-
-    DEBUG(
-        "CLIQUE: "
-        .. tostring(btn.Name)
-    )
-
-    local ok, vim =
-        pcall(function()
-            return game:GetService(
-                "VirtualInputManager"
-            )
-        end)
-
-    if ok
-        and vim
-        and btn.AbsolutePosition then
-
-        local pos =
-            btn.AbsolutePosition
-
-        local size =
-            btn.AbsoluteSize
-
-        local X =
-            math.floor(
-                pos.X
-                + size.X / 2
-            )
-
-        local Y =
-            math.floor(
-                pos.Y
-                + size.Y / 2
-            )
-
-        local clicou =
-            pcall(function()
-
-                vim:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    true,
-                    game,
-                    0
-                )
-
-                task.wait(0.05)
-
-                vim:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    false,
-                    game,
-                    0
-                )
-            end)
-
-        if clicou then
-            DEBUG(
-                "CLIQUE OK"
-            )
-
-            return true
-        end
-    end
-
-    if firesignal then
-        local okSignal =
-            pcall(function()
-                firesignal(
-                    btn.MouseButton1Click
-                )
-            end)
-
-        if okSignal then
-            DEBUG(
-                "FIRESIGNAL OK"
-            )
-
-            return true
-        end
-    end
-
-    DEBUG(
-        "CLIQUE FALHOU"
-    )
-
-    return false
-end
-
-local function ACHAR_BOTAO_INVENTARIO()
-    local achados = {}
-
-    local pg =
-        v12:FindFirstChild(
-            "PlayerGui"
-        )
-
-    if not pg then
-        return nil
-    end
-
-    local function varrer(p)
-        for _, c in ipairs(
-            p:GetChildren()
-        ) do
-
-            if c:IsA(
-                "GuiButton"
-            ) then
-
-                local nome =
-                    string.lower(
-                        tostring(
-                            c.Name
-                        )
-                    )
-
-                if string.find(
-                    nome,
-                    "nvent"
-                )
-                    or string.find(
-                        nome,
-                        "ackpack"
-                    )
-                    or string.find(
-                        nome,
-                        "ochila"
-                    ) then
-
-                    table.insert(
-                        achados,
-                        c
-                    )
-                end
-            end
-
-            if c:IsA("Frame")
-                or c:IsA(
-                    "ScrollingFrame"
-                )
-                or c:IsA(
-                    "ScreenGui"
-                )
-                or c:IsA(
-                    "TextLabel"
-                )
-                or c:IsA(
-                    "ImageLabel"
-                )
-                or c:IsA(
-                    "TextButton"
-                )
-                or c:IsA(
-                    "ImageButton"
-                ) then
-
-                varrer(c)
-            end
-        end
-    end
-
-    varrer(pg)
-
-    if #achados > 0 then
-        table.sort(
-            achados,
-            function(a, b)
-                return
-                    (
-                        a.AbsoluteSize.X
-                        * a.AbsoluteSize.Y
-                    )
-                    >
-                    (
-                        b.AbsoluteSize.X
-                        * b.AbsoluteSize.Y
-                    )
-            end
-        )
-
-        return achados[1]
-    end
-
-    return nil
-end
-
-local function ABRIR_INVENTARIO()
-    DEBUG(
-        "Abrindo inventário..."
-    )
-
-    local grid =
-        ITEM_GRID()
-
-    if grid then
-        for _, c in ipairs(
-            grid:GetChildren()
-        ) do
-            if c:IsA(
-                "ImageButton"
-            ) then
-
-                DEBUG(
-                    "Inventário já estava aberto"
-                )
-
-                return true
-            end
-        end
-    end
-
-    local botao =
-        ACHAR_BOTAO_INVENTARIO()
-
-    if botao then
-        DEBUG(
-            "Botão inventário encontrado: "
-            .. tostring(
-                botao.Name
-            )
-        )
-
-        CLICAR_BOTAO(
-            botao
-        )
-
-        task.wait(1.2)
-
-        grid =
-            ITEM_GRID()
-
-        if grid then
-            for _, c in ipairs(
-                grid:GetChildren()
-            ) do
-                if c:IsA(
-                    "ImageButton"
-                ) then
-
-                    DEBUG(
-                        "Inventário aberto"
-                    )
-
-                    return true
-                end
-            end
-        end
-    else
-        DEBUG(
-            "Botão de inventário não encontrado"
-        )
-    end
-
-    return false
-end
-
-local function ESCONDER_INVENTARIO()
-    pcall(function()
-        local pg =
-            v12:FindFirstChild(
-                "PlayerGui"
-            )
-
-        if not pg then
-            return
-        end
-
-        for _, sg in ipairs(
-            pg:GetChildren()
-        ) do
-            if sg:IsA(
-                "ScreenGui"
-            ) then
-
-                for _, j in ipairs(
-                    sg:GetChildren()
-                ) do
-
-                    local nm =
-                        tostring(
-                            j.Name
-                        )
-
-                    if (
-                        string.find(
-                            nm,
-                            "InventoryMenuWindow"
-                        )
-                        or string.find(
-                            nm,
-                            "_InventoryMenuWindow"
-                        )
-                    )
-                    and j:IsA(
-                        "Frame"
-                    ) then
-
-                        j.Visible = false
-                    end
-                end
-            end
-        end
-    end)
-end
-
-local function COLETAR_INVENTARIO()
-    DEBUG(
-        "Coletando inventário..."
-    )
-
-    pcall(
-        ABRIR_INVENTARIO
-    )
-
-    local grid =
-        ITEM_GRID()
-
-    if not grid then
-        pcall(
-            ABRIR_INVENTARIO
-        )
-
-        task.wait(0.8)
-
-        grid =
-            ITEM_GRID()
-    end
-
-    if not grid then
-        pcall(
-            ESCONDER_INVENTARIO
-        )
-
-        DEBUG(
-            "Inventário não disponível"
-        )
-
-        return nil,
-            "inventario nao disponivel"
-    end
-
-    local db =
-        ITEM_DATABASE()
-
-    local itens = {}
-    local vistos = {}
-
-    for _, card in ipairs(
-        grid:GetChildren()
-    ) do
-
-        if card:IsA(
-            "ImageButton"
-        ) then
-
-            local id =
-                tostring(
-                    card:GetAttribute(
-                        "ItemId"
-                    )
-                    or card:GetAttribute(
-                        "itemId"
-                    )
-                    or ""
-                )
-
-            if id:match(
-                "^[HG][A-Za-z0-9_-]+$"
-            )
-                and id ~= "H0000"
-                and id ~= "H0001"
-                and id ~= "G0000"
-                and id ~= "G0001" then
-
-                local quantidade =
-                    QUANTIDADE(
-                        card
-                    )
-
-                local nome = nil
-
-                local raridade =
-                    card:GetAttribute(
-                        "Rarity"
-                    )
-
-                local thumbnail = nil
-
-                if db then
-                    local item =
-                        db:FindFirstChild(
-                            id
-                        )
-
-                    if item then
-                        nome =
-                            item:GetAttribute(
-                                "ItemName"
-                            )
-
-                        raridade =
-                            item:GetAttribute(
-                                "Rarity"
-                            )
-                            or raridade
-
-                        thumbnail =
-                            item:GetAttribute(
-                                "Thumbnail"
-                            )
-                    end
-                end
-
-                if not nome then
-                    local bottom =
-                        card:FindFirstChild(
-                            "BottomLabel"
-                        )
-
-                    if bottom
-                        and bottom:IsA(
-                            "TextLabel"
-                        ) then
-
-                        nome =
-                            bottom.Text
-                    end
-                end
-
-                if not vistos[id] then
-                    vistos[id] = true
-
-                    table.insert(
-                        itens,
-                        {
-                            id = id,
-                            quantity =
-                                quantidade,
-                            name =
-                                nome or id,
-                            rarity =
-                                tonumber(
-                                    raridade
-                                ),
-                            thumbnail =
-                                thumbnail,
-                            event =
-                                EVENTO(id)
-                        }
-                    )
-                end
-            end
-        end
-    end
-
-    pcall(
-        ESCONDER_INVENTARIO
-    )
-
-    DEBUG(
-        "Inventário coletado: "
-        .. tostring(#itens)
-        .. " tipos"
-    )
-
-    return itens
-end
-
-local function SINCRONIZAR()
-    DEBUG(
-        "Iniciando sincronização"
-    )
-
-    local inventario, erro =
-        COLETAR_INVENTARIO()
-
-    if not inventario then
-        DEBUG(
-            "Erro inventário: "
-            .. tostring(erro)
-        )
-
-        return false
-    end
-
-    if #inventario == 0 then
-        DEBUG(
-            "Inventário vazio"
-        )
-
-        return false
-    end
-
-    DEBUG(
-        "Enviando "
-        .. tostring(#inventario)
-        .. " itens para API"
-    )
-
-    local resposta, status =
-        HTTP(
-            "POST",
-            "/api/inventory/sync",
-            {
-                worker =
-                    v2.WORKER,
-
-                account =
-                    v12.Name,
-
-                items =
-                    inventario
-            }
-        )
-
-    if status >= 200
-        and status < 300 then
-
-        DEBUG(
-            "Estoque sincronizado: "
-            .. tostring(
-                resposta
-                and resposta.totalItems
-                or 0
-            )
-        )
-
-        return true
-    end
-
-    DEBUG(
-        "Falha sincronização HTTP "
-        .. tostring(status)
-    )
-
-    return false
-end
-
-local function FOI_SOLICITADO()
-    local resposta, status =
-        HTTP(
-            "GET",
-            "/api/inventory/request?worker="
-            .. HttpService:UrlEncode(
-                v2.WORKER
-            )
-        )
-
-    if status ~= 200
-        or not resposta then
-
-        return false
-    end
-
-    return resposta.requested == true
-end
-
-local function v90(
-    v91,
-    v92,
-    v93
-)
-    local v94 =
-        os.clock()
-
-    repeat
-        local v22, v89 =
-            pcall(v92)
-
-        if v22
-            and v89 then
-
-            return v89
-        end
-
-        task.wait(
-            v93
-            or 0.08
-        )
-    until
-        os.clock() - v94
-        >= v91
-
-    return nil
-end
-
-local function v95(v96)
-    local v97 =
-        string.lower(
-            tostring(
-                v96 or ""
-            )
-        )
-
-    for _, v98 in ipairs(
-        Players:GetPlayers()
-    ) do
-
-        if string.lower(
-            v98.Name
-        ) == v97 then
-
-            return v98
-        end
-    end
-
-    return nil
-end
-
-local function v99(
-    v28,
-    ...
-)
-    local v76 = v28
-
-    for _, v16 in ipairs(
-        {...}
-    ) do
-
-        if not v76 then
-            return nil
-        end
-
-        v76 =
-            v76:FindFirstChild(
-                v16
-            )
-    end
-
-    return v76
-end
-
-local function v100()
-    return PlayerGui:FindFirstChild(
-        "MenusScreenGui"
-    )
-end
-
-local function v101()
-    return PlayerGui:FindFirstChild(
-        "ScreenGui"
-    )
-end
-
-local function v102(v103)
-    if not v103 then
-        return false
-    end
-
-    local v22, v89 =
-        pcall(function()
-            return v103.Visible
-        end)
-
-    return v22
-        and v89 == true
-end
-
-local function v104(v105)
-    if not v105 then
-        return
-    end
-
-    local v28 =
-        v105.Parent
-
-    while v28 do
-        if v28:IsA(
-            "ScrollingFrame"
-        ) then
-
-            pcall(function()
-                local v106 =
-                    v28.CanvasPosition.Y
-
-                local v107 =
-                    v105.AbsolutePosition.Y
-                    - v28.AbsolutePosition.Y
-
-                local v108 =
-                    math.max(
-                        0,
-                        v106
-                        + v107
-                        - math.floor(
-                            v28.AbsoluteSize.Y
-                            * 0.35
-                        )
-                    )
-
-                v28.CanvasPosition =
-                    Vector2.new(
-                        v28.CanvasPosition.X,
-                        v108
-                    )
-            end)
-
-            task.wait(0.08)
-
-            return
-        end
-
-        v28 =
-            v28.Parent
-    end
-end
-
-local function v109(v105)
-    if not v105
-        or not v105:IsA(
-            "GuiButton"
-        ) then
-
-        DEBUG(
-            "v109: botão inválido"
-        )
-
-        return false,
-            "botão inválido"
-    end
-
-    DEBUG(
-        "v109: tentando clicar "
-        .. tostring(
-            v105.Name
-        )
-    )
-
-    v104(v105)
-
-    local v110 = false
-
-    if v1 then
-        v110 =
-            pcall(function()
-                local v39 =
-                    v105.AbsolutePosition
-
-                local v111 =
-                    v105.AbsoluteSize
-
-                local X =
-                    math.floor(
-                        v39.X
-                        + v111.X / 2
-                    )
-
-                local Y =
-                    math.floor(
-                        v39.Y
-                        + v111.Y / 2
-                    )
-
-                v1:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    true,
-                    game,
-                    0
-                )
-
-                task.wait(0.04)
-
-                v1:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    false,
-                    game,
-                    0
-                )
-            end)
-    end
-
-    if v110 then
-        DEBUG(
-            "v109: VirtualInputManager OK"
-        )
-    elseif firesignal then
-        local v112 =
-            pcall(function()
-                firesignal(
-                    v105.MouseButton1Click
-                )
-            end)
-
-        if not v112 then
-            DEBUG(
-                "v109: firesignal falhou"
-            )
-
-            return false,
-                "não consegui acionar o botão"
-        end
-
-        DEBUG(
-            "v109: firesignal OK"
-        )
-    else
-        DEBUG(
-            "v109: nenhum método de clique disponível"
-        )
-
-        return false,
-            "executor sem VirtualInputManager/firesignal"
-    end
-
-    task.wait(
-        v2.v6
-    )
-
-    return true
-end
-
-local function v113(v105)
-    if not v105
-        or not v105:IsA(
-            "GuiButton"
-        ) then
-
-        return false,
-            "botão inválido"
-    end
-
-    if firesignal then
-        local OK =
-            pcall(function()
-                firesignal(
-                    v105.MouseButton1Click
-                )
-            end)
-
-        if OK then
-            task.wait(
-                v2.v8
-            )
-
-            return true
-        end
-    end
-
-    v104(v105)
-
-    if v1 then
-        local OK =
-            pcall(function()
-                local v39 =
-                    v105.AbsolutePosition
-
-                local v111 =
-                    v105.AbsoluteSize
-
-                local X =
-                    math.floor(
-                        v39.X
-                        + v111.X / 2
-                    )
-
-                local Y =
-                    math.floor(
-                        v39.Y
-                        + v111.Y / 2
-                    )
-
-                v1:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    true,
-                    game,
-                    0
-                )
-
-                task.wait(0.01)
-
-                v1:SendMouseButtonEvent(
-                    X,
-                    Y,
-                    0,
-                    false,
-                    game,
-                    0
-                )
-            end)
-
-        if OK then
-            task.wait(
-                v2.v8
-            )
-
-            return true
-        end
-    end
-
-    return false,
-        "executor sem método de clique compatível"
-end
-
-local function v114(v115)
-    if not v115 then
-        return 0
-    end
-
-    local v116 =
-        v115:FindFirstChild(
-            "TopLabel"
-        )
-
-    local v74 =
-        v116
-        and tostring(
-            v116.Text or ""
-        )
-        or ""
-
-    local v84 =
-        tonumber(
-            string.match(
-                v74,
-                "[xX]%s*(%d+)"
-            )
-        )
-
-    return v84 or 1
-end
-
-local function FTFID(v115)
-    if not v115 then
-        return nil
-    end
-
-    local v89 =
-        v115:GetAttribute(
-            "ItemId"
-        )
-        or v115:GetAttribute(
-            "itemId"
-        )
-
-    if v89 == nil then
-        return nil
-    end
-
-    return string.upper(
-        tostring(v89)
-    )
-end
-
-local function v117(v115)
-    local v71 =
-        v115
-        and v115:FindFirstChild(
-            "BottomLabel"
-        )
-
-    return {
-        ftfId =
-            FTFID(v115),
-
-        image =
-            v115
-            and tostring(
-                v115.Image or ""
-            )
-            or "",
-
-        name =
-            v71
-            and tostring(
-                v71.Text or ""
-            )
-            or ""
-    }
-end
-
-local function v118(
-    v115,
-    v119
-)
-    if not v115
-        or not v119 then
-
-        return false
-    end
-
-    local ID =
-        FTFID(v115)
-
-    if ID
-        and v119.ftfId
-        and ID == v119.ftfId then
-
-        return true
-    end
-
-    local v71 =
-        v115:FindFirstChild(
-            "BottomLabel"
-        )
-
-    local v16 =
-        v71
-        and tostring(
-            v71.Text or ""
-        )
-        or ""
-
-    local v26 =
-        tostring(
-            v115.Image or ""
-        )
-
-    if v119.image ~= ""
-        and v26 == v119.image then
-
-        return true
-    end
-
-    if v119.name ~= ""
-        and v16 == v119.name then
-
-        return true
-    end
-
-    return false
-end
-
-local function v120(
-    v121,
-    ftfId
-)
-    if not v121 then
-        return nil
-    end
-
-    local v122 =
-        string.upper(
-            tostring(
-                ftfId or ""
-            )
-        )
-
-    for _, v115 in ipairs(
-        v121:GetChildren()
-    ) do
-
-        if v115:IsA(
-            "ImageButton"
-        )
-            and v115.Name
-                ~= "ItemCellPrefab" then
-
-            if FTFID(v115)
-                == v122
-                and v102(v115) then
-
-                return v115
-            end
-        end
-    end
-
-    return nil
-end
-
-local function v123(
-    v121,
-    ftfId
-)
-    local v115 =
-        v120(
-            v121,
-            ftfId
-        )
-
-    if not v115 then
-        return 0
-    end
-
-    return v114(v115)
-end
-
-local function v124(
-    v125,
-    v119
-)
-    if not v125 then
-        return 0
-    end
-
-    local v126 = 0
-
-    for _, v115 in ipairs(
-        v125:GetChildren()
-    ) do
-
-        if v115:IsA(
-            "ImageButton"
-        )
-            and v115.Name
-                ~= "ItemCellPrefab"
-            and v102(v115) then
-
-            if v118(
-                v115,
-                v119
-            ) then
-
-                v126 +=
-                    v114(v115)
-            end
-        end
-    end
-
-    return v126
-end
-
-local function v127()
-    return v99(
-        v100(),
-        "TradingMenuWindow"
-    )
-end
-
-local function v128(v96)
-    local v43 =
-        v127()
-
-    local v129 =
-        v99(
-            v43,
-            "TopBar",
-            "OtherTraderTitleText"
-        )
-
-    if not v129 then
-        return false
-    end
-
-    return
-        string.lower(
-            tostring(
-                v129.Text or ""
-            )
-        )
-        ==
-        string.lower(
-            tostring(
-                v96 or ""
-            )
-        )
-end
-
-local function v130()
-    local v131 =
-        v99(
-            v101(),
-            "TradePopUpWindow"
-        )
-
-    if not v131
-        or not v102(v131) then
-
-        return true
-    end
-
-    local v132 =
-        v90(
-            35,
-            function()
-                return not v102(v131)
-            end,
-            0.15
-        )
-
-    return v132 == true
-end
-
--- CORRIGIDA: LISTA DE TROCAS
-local function v133()
-    DEBUG(
-        "Abrindo lista de trades..."
-    )
-
-    if not v130() then
-        DEBUG(
-            "TradePopUpWindow está bloqueando"
-        )
-
-        return false,
-            "há uma solicitação de trade recebida bloqueando a interface"
-    end
-
-    local v134 =
-        v99(
-            v100(),
-            "TradeListMenuWindow"
-        )
-
-    if v134
-        and v102(v134) then
-
-        DEBUG(
-            "TradeListMenuWindow já aberto"
-        )
-
-        return true,
-            v134
-    end
-
-    local v105 =
-        v99(
-            v101(),
-            "MenusTabFrame",
-            "tradeMenuButton"
-        )
-
-    if not v105 then
-        v105 =
-            v99(
-                v100(),
-                "MenusTabFrame",
-                "tradeMenuButton"
-            )
-    end
-
-    if not v105 then
-        local function procurar(
-            pasta
-        )
-            for _, objeto in ipairs(
-                pasta:GetChildren()
-            ) do
-
-                if objeto:IsA(
-                    "GuiButton"
-                ) then
-
-                    local nome =
-                        string.lower(
-                            tostring(
-                                objeto.Name
-                            )
-                        )
-
-                    if string.find(
-                        nome,
-                        "trademenu"
-                    )
-                        or string.find(
-                            nome,
-                            "trade"
-                        ) then
-
-                        return objeto
-                    end
-                end
-
-                if objeto:IsA(
-                    "GuiObject"
-                )
-                    or objeto:IsA(
-                        "ScreenGui"
-                    ) then
-
-                    local encontrado =
-                        procurar(
-                            objeto
-                        )
-
-                    if encontrado then
-                        return encontrado
-                    end
-                end
-            end
-
-            return nil
-        end
-
-        v105 =
-            procurar(
-                PlayerGui
-            )
-    end
-
-    if not v105 then
-        DEBUG(
-            "Nenhum botão de trade encontrado"
-        )
-
-        return false,
-            "botão da lista de trades não encontrado"
-    end
-
-    DEBUG(
-        "Botão encontrado: "
-        .. tostring(
-            v105:GetFullName()
-        )
-    )
-
-    local OK, v135 =
-        v109(
-            v105
-        )
-
-    if not OK then
-        return false,
-            v135
-    end
-
-    local v136 =
-        v90(
-            5,
-            function()
-
-                local lista =
-                    v99(
-                        v100(),
-                        "TradeListMenuWindow"
-                    )
-
-                if lista
-                    and v102(lista) then
-
-                    return lista
-                end
-
-                local lista2 =
-                    v99(
-                        v101(),
-                        "TradeListMenuWindow"
-                    )
-
-                if lista2
-                    and v102(lista2) then
-
-                    return lista2
-                end
-
-                return nil
-            end
-        )
-
-    if not v136 then
-        DEBUG(
-            "TradeListMenuWindow NÃO abriu"
-        )
-
-        return false,
-            "lista de trades não abriu"
-    end
-
-    DEBUG(
-        "TradeListMenuWindow abriu"
-    )
-
-    return true,
-        v136
-end
-local function v137(v96)
-    local v65 =
-        v99(
-            v100(),
-            "TradeListMenuWindow",
-            "Body",
-            "ScrollingFrame"
-        )
-
-    if not v65 then
-        DEBUG(
-            "ScrollingFrame da lista não encontrado"
-        )
-
-        return nil
-    end
-
-    local v122 =
-        string.lower(
-            tostring(
-                v96 or ""
-            )
-        )
-
-    for _, v138 in ipairs(
-        v65:GetChildren()
-    ) do
-
-        if v138:IsA(
-            "Frame"
-        )
-            and v138.Name
-                == "PlayerTradeCell"
-            and v102(v138) then
-
-            local v36 =
-                v138:FindFirstChild(
-                    "PlayerNameLabel"
-                )
-
-            if v36
-                and string.lower(
-                    tostring(
-                        v36.Text or ""
-                    )
-                ) == v122 then
-
-                DEBUG(
-                    "Cliente encontrado na lista: "
-                    .. tostring(v96)
-                )
-
-                return v138
-            end
-        end
-    end
-
-    return nil
-end
-
-local function v139(v96)
-    DEBUG(
-        "Iniciando trade com "
-        .. tostring(v96)
-    )
-
-    local v103 =
-        v95(v96)
-
-    if not v103 then
-        DEBUG(
-            "Cliente não encontrado para enviar trade"
-        )
-
-        return false,
-            "cliente não está neste servidor"
-    end
-
-    local MainRemote =
-        OBTER_MAIN_REMOTE()
-
-    if not MainRemote then
-        DEBUG(
-            "MainRemote NÃO encontrado"
-        )
-
-        return false,
-            "MainRemote não encontrado"
-    end
-
-    DEBUG(
-        "Enviando pedido de trade para UserId "
-        .. tostring(
-            v103.UserId
-        )
-    )
-
-    local Enviou,
-        ErroEnvio =
-        pcall(function()
-            MainRemote:FireServer(
-                "SendTradeRequest",
-                v103.UserId
-            )
-        end)
-
-    if not Enviou then
-        DEBUG(
-            "Falha ao enviar pedido: "
-            .. tostring(
-                ErroEnvio
-            )
-        )
-
-        return false,
-            tostring(
-                ErroEnvio
-            )
-    end
-
-    DEBUG(
-        "Pedido de trade enviado"
-    )
-
-    local v136 =
-        v90(
-            v2.v3,
-            function()
-
-                local v43 =
-                    v127()
-
-                if v43
-                    and v102(v43)
-                    and v128(v96) then
-
-                    return v43
-                end
-
-                return nil
-            end,
-            0.12
-        )
-
-    if not v136 then
-        DEBUG(
-            "TradingMenuWindow NÃO abriu ou jogador diferente"
-        )
-
-        return false,
-            "cliente não aceitou a trade a tempo"
-    end
-
-    DEBUG(
-        "TradeWindow aberta corretamente"
-    )
-
-    return true,
-        v136
-end
-
-local function v158(
-    v159,
-    v160
-)
-    DEBUG(
-        "Preparando oferta"
-    )
-
-    local v161 =
-        v99(
-            v159,
-            "Body",
-            "InventoryGridFrame"
-        )
-
-    local v162 =
-        v99(
-            v159,
-            "Body",
-            "OfferFrame",
-            "YourOfferFrame"
-        )
-
-    if not v161
-        or not v162 then
-
-        DEBUG(
-            "Estrutura da oferta não encontrada"
-        )
-
-        return nil,
-            nil,
-            "estrutura da trade não encontrada"
-    end
-
-    local v21 = 0
-
-    for _, v163 in ipairs(
-        v162:GetChildren()
-    ) do
-
-        if v163:IsA(
-            "ImageButton"
-        )
-            and v163.Name
-                ~= "ItemCellPrefab"
-            and v102(v163) then
-
-            v21 += 1
-        end
-    end
-
-    if v21 > 0 then
-        DEBUG(
-            "Oferta já possui "
-            .. tostring(v21)
-            .. " item(ns)"
-        )
-
-        return nil,
-            nil,
-            "a oferta abriu com itens inesperados"
-    end
-
-    local Tentativas = {}
-    local EstadoPorChave = {}
-    local v164 = {}
-
-    for _, v83 in ipairs(
-        v160
-    ) do
-
-        local ftfId =
-            string.upper(
-                tostring(
-                    v83.ftfId
-                    or ""
-                )
-            )
-
-        if ftfId == ""
-            or v83.invalid == true then
-
-            DEBUG(
-                "Item sem FTF ID: "
-                .. tostring(
-                    v83.name
-                )
-            )
-
-            return nil,
-                nil,
-                "pedido contém item sem FTF ID"
-        end
-
-        local v165 =
-            math.max(
-                0,
-                tonumber(
-                    v83.quantity
-                    or 0
-                )
-                or 0
-            )
-
-        if v165 > 0 then
-            local v115 =
-                v120(
-                    v161,
-                    ftfId
-                )
-
-            if not v115 then
-                DEBUG(
-                    "Item não encontrado: "
-                    .. tostring(
-                        ftfId
-                    )
-                )
-
-                return nil,
-                    nil,
-                    "item não encontrado no inventário da trade: "
-                    .. ftfId
-            end
-
-            if v164[ftfId] == nil then
-                v164[ftfId] =
-                    v123(
-                        v161,
-                        ftfId
-                    )
-            end
-
-            local v166 =
-                v117(v115)
-
-            local v167 =
-                tostring(
-                    v83.key
-                )
-
-            EstadoPorChave[v167] = {
-                key = v167,
-                ftfId = ftfId,
-                name = v83.name,
-                requested = v165,
-                before =
-                    v124(
-                        v162,
-                        v166
-                    ),
-                fingerprint =
-                    v166
-            }
-
-            for _ = 1, v165 do
-                table.insert(
-                    Tentativas,
-                    {
-                        key = v167,
-                        ftfId = ftfId,
-                        card = v115
-                    }
-                )
-            end
-        end
-    end
-
-    DEBUG(
-        "Tentativas de itens: "
-        .. tostring(
-            #Tentativas
-        )
-    )
-
-    if #Tentativas == 0 then
-        return nil,
-            nil,
-            "nenhum item restante para colocar na oferta"
-    end
-
-    local MainRemote =
-        OBTER_MAIN_REMOTE()
-
-    if not MainRemote then
-        DEBUG(
-            "MainRemote NÃO encontrado"
-        )
-
-        return nil,
-            nil,
-            "MainRemote não encontrado"
-    end
-
-    local codigos = {}
-
-    for _, Tentativa in ipairs(
-        Tentativas
-    ) do
-
-        table.insert(
-            codigos,
-            Tentativa.ftfId
-        )
-    end
-
-    DEBUG(
-        "Enviando oferta via MainRemote: "
-        .. tostring(
-            #codigos
-        )
-        .. " item(ns)"
-    )
-
-    local Enviou,
-        ErroEnvio =
-        pcall(function()
-            MainRemote:FireServer(
-                "SendMyTradeOffer",
-                codigos
-            )
-        end)
-
-    if not Enviou then
-        DEBUG(
-            "Falha ao enviar oferta: "
-            .. tostring(
-                ErroEnvio
-            )
-        )
-
-        return nil,
-            nil,
-            tostring(
-                ErroEnvio
-            )
-    end
-
-    DEBUG(
-        "Oferta enviada via MainRemote"
-    )
-
-    task.wait(
-        v2.v10
-    )
-
-    local v168 = {}
-    local v169 = 0
-
-    for v167, v24 in pairs(
-        EstadoPorChave
-    ) do
-
-        local Depois =
-            v124(
-                v162,
-                v24.fingerprint
-            )
-
-        local Entrou =
-            math.max(
-                0,
-                Depois
-                - (
-                    tonumber(
-                        v24.before
-                    )
-                    or 0
-                )
-            )
-
-        Entrou =
-            math.min(
-                Entrou,
-                tonumber(
-                    v24.requested
-                )
-                or 0
-            )
-
-        if Entrou > 0 then
-            v168[v167] = {
-                key = v167,
-                ftfId = v24.ftfId,
-                name = v24.name,
-                quantity = Entrou
-            }
-
-            v169 += Entrou
-        end
-    end
-
-    DEBUG(
-        "Itens realmente na oferta: "
-        .. tostring(v169)
-    )
-
-    if v169 <= 0 then
-        DEBUG(
-            "Nenhum item entrou na oferta; tentando novamente..."
-        )
-
-        local RetryOK,
-            RetryError =
-            pcall(function()
-                MainRemote:FireServer(
-                    "SendMyTradeOffer",
-                    codigos
-                )
-            end)
-
-        if not RetryOK then
-            DEBUG(
-                "Fallback da oferta falhou: "
-                .. tostring(
-                    RetryError
-                )
-            )
-
-            return nil,
-                nil,
-                tostring(
-                    RetryError
-                )
-        end
-
-        task.wait(
-            0.5
-        )
-
-        v168 = {}
-        v169 = 0
-
-        for v167, v24 in pairs(
-            EstadoPorChave
-        ) do
-            local Depois =
-                v124(
-                    v162,
-                    v24.fingerprint
-                )
-
-            local Entrou =
-                math.max(
-                    0,
-                    Depois
-                    - (
-                        tonumber(
-                            v24.before
-                        )
-                        or 0
-                    )
-                )
-
-            Entrou =
-                math.min(
-                    Entrou,
-                    tonumber(
-                        v24.requested
-                    )
-                    or 0
-                )
-
-            if Entrou > 0 then
-                v168[v167] = {
-                    key = v167,
-                    ftfId = v24.ftfId,
-                    name = v24.name,
-                    quantity = Entrou
-                }
-
-                v169 += Entrou
-            end
-        end
-
-        DEBUG(
-            "Itens após fallback: "
-            .. tostring(
-                v169
-            )
-        )
-    end
-
-    if v169 <= 0 then
-        return nil,
-            nil,
-            "nenhum item entrou na oferta depois do fallback"
-    end
-
-    return v168,
-        v164,
-        nil
-end
-
-local function v170(v168)
-    local v171 = {}
-
-    for _, v89 in pairs(
-        v168 or {}
-    ) do
-
-        table.insert(
-            v171,
-            {
-                key = v89.key,
-                ftfId = v89.ftfId,
-                quantity =
-                    v89.quantity
-            }
-        )
-    end
-
-    table.sort(
-        v171,
-        function(a, b)
-            return tostring(
-                a.key
-            )
-            <
-            tostring(
-                b.key
-            )
-        end
-    )
-
-    return v171
-end
-
-local function v172(v168)
-    local v173 = {}
-
-    for _, v89 in pairs(
-        v168 or {}
-    ) do
-
-        v173[v89.ftfId] =
-            (
-                v173[v89.ftfId]
-                or 0
-            )
-            +
-            (
-                tonumber(
-                    v89.quantity
-                )
-                or 0
-            )
-    end
-
-    return v173
-end
-
-local function v174(
-    v175,
-    v176,
-    v168,
-    v177
-)
-    while true do
-        local v22, v88, v24 =
-            pcall(function()
-
-                local B, S =
-                    HTTP(
-                        "POST",
-                        "/api/delivery/"
-                        .. v175
-                        .. "/progress",
-                        {
-                            worker =
-                                v2.WORKER,
-
-                            batchId =
-                                v176,
-
-                            delivered =
-                                v170(v168),
-
-                            detail =
-                                v177
-                                or "trade concluída"
-                        }
-                    )
-
-                return B, S
-            end)
-
-        if v22
-            and v24 >= 200
-            and v24 < 300
-            and v88 then
-
-            return v88
-        end
-
-        task.wait(5)
-    end
-end
-
-local function v178(v175)
-    local v24 = {
-        ativo = true
-    }
-
-    task.spawn(function()
-        while v24.ativo do
-            task.wait(
-                v2.v11
-            )
-
-            if not v24.ativo then
-                break
-            end
-
-            pcall(function()
-                HTTP(
-                    "POST",
-                    "/api/delivery/"
-                    .. v175
-                    .. "/heartbeat",
-                    {
-                        worker =
-                            v2.WORKER
-                    }
-                )
-            end)
-        end
-    end)
-
-    return v24
-end
-
-local function v179(
-    v160,
-    v168
-)
-    for _, v83 in ipairs(
-        v160
-    ) do
-
-        local v180 =
-            v168[v83.key]
-
-        if v180 then
-            v83.quantity =
-                math.max(
-                    0,
-                    tonumber(
-                        v83.quantity
-                    )
-                    or 0
-                )
-
-            v83.quantity =
-                math.max(
-                    0,
-                    v83.quantity
-                    -
-                    (
-                        tonumber(
-                            v180.quantity
-                        )
-                        or 0
-                    )
-                )
-        end
-    end
-
-    local v181 = {}
-
-    for _, v83 in ipairs(
-        v160
-    ) do
-
-        if (
-            tonumber(
-                v83.quantity
-            )
-            or 0
-        ) > 0 then
-
-            table.insert(
-                v181,
-                v83
-            )
-        end
-    end
-
-    return v181
-end
-
-local function v149(
-    v164,
-    v190
-)
-    DEBUG(
-        "Conferindo estoque após a trade..."
-    )
-
-    local inventario, erro =
-        COLETAR_INVENTARIO()
-
-    if not inventario then
-        DEBUG(
-            "Não foi possível conferir estoque: "
-            .. tostring(
-                erro
-            )
-        )
-
-        return false,
-            tostring(
-                erro
-            )
-    end
-
-    local atual = {}
-
-    for _, item in ipairs(
-        inventario
-    ) do
-
-        local id =
-            string.upper(
-                tostring(
-                    item.id
-                    or ""
-                )
-            )
-
-        if id ~= "" then
-            atual[id] =
-                tonumber(
-                    item.quantity
-                    or 0
-                )
-                or 0
-        end
-    end
-
-    for ftfId,
-        quantidadeEntregue
-        in pairs(
-            v190 or {}
-        ) do
-
-        local id =
-            string.upper(
-                tostring(
-                    ftfId
-                )
-            )
-
-        local antes =
-            tonumber(
-                v164[id]
-                or 0
-            )
-            or 0
-
-        local depois =
-            tonumber(
-                atual[id]
-                or 0
-            )
-            or 0
-
-        local esperado =
-            math.max(
-                0,
-                antes
-                - (
-                    tonumber(
-                        quantidadeEntregue
-                    )
-                    or 0
-                )
-            )
-
-        if depois > esperado then
-            DEBUG(
-                "Estoque não bateu para "
-                .. id
-                .. " | antes="
-                .. tostring(
-                    antes
-                )
-                .. " | esperado="
-                .. tostring(
-                    esperado
-                )
-                .. " | atual="
-                .. tostring(
-                    depois
-                )
-            )
-
-            return false,
-                "estoque não confirmou a remoção do item "
-                .. id
-        end
-
-        DEBUG(
-            "Estoque confirmado: "
-            .. id
-            .. " | "
-            .. tostring(
-                antes
-            )
-            .. " -> "
-            .. tostring(
-                depois
-            )
-        )
-    end
-
-    DEBUG(
-        "Estoque confirmado com sucesso"
-    )
-
-    return true,
-        "estoque conferido"
-end
-
-local function v182(v81)
-    local v96 =
-        tostring(
-            v81.nick
-            or ""
-        )
-
-    DEBUG(
-        "PROCESSANDO PEDIDO "
-        .. tostring(
-            v81.orderId
-        )
-    )
-
-    DEBUG(
-        "Cliente: "
-        .. tostring(v96)
-    )
-
-    local v160 = {}
-
-    for _, v83 in ipairs(
-        v81.items or {}
-    ) do
-
-        table.insert(
-            v160,
-            {
-                key =
-                    tostring(
-                        v83.key
-                        or v83.ftfId
-                        or v83.id
-                        or ""
-                    ),
-
-                ftfId =
-                    v83.ftfId,
-
-                name =
-                    v83.name,
-
-                quantity =
-                    tonumber(
-                        v83.quantity
-                        or 0
-                    )
-                    or 0,
-
-                invalid =
-                    v83.invalid
-                    == true
-            }
-        )
-    end
-
-    if #v160 == 0 then
-        DEBUG(
-            "Pedido sem itens"
-        )
-
-        return true,
-            "nenhum item restante"
-    end
-
-    local v183 =
-        v178(
-            v81.orderId
-        )
-
-    local v184 =
-        tonumber(
-            v81.progress
-            and v81.progress.tradesCompleted
-            or 0
-        )
-        or 0
-
-    local v22, v173, v177 =
-        pcall(function()
-
-            while #v160 > 0 do
-                DEBUG(
-                    "Restam "
-                    .. tostring(
-                        #v160
-                    )
-                    .. " tipos de item"
-                )
-
-                v73(
-                    "aguardando pedidos"
-                )
-
-                local v103 =
-                    v95(v96)
-
-                if not v103 then
-                    DEBUG(
-                        "CLIENTE NÃO ESTÁ NO SERVIDOR"
-                    )
-
-                    return false,
-                        "cliente não está neste servidor"
-                end
-
-                DEBUG(
-                    "Cliente está no servidor"
-                )
-
-                v73(
-                    "entrega pendente"
-                )
-
-                local v185, v186 =
-                    v139(v96)
-
-                if not v185 then
-                    DEBUG(
-                        "Falha ao iniciar trade: "
-                        .. tostring(
-                            v186
-                        )
-                    )
-
-                    return false,
-                        v186
-                end
-
-                local v159 =
-                    v186
-
-                if not v128(v96) then
-                    DEBUG(
-                        "Trade abriu com jogador errado"
-                    )
-
-                    return false,
-                        "a trade abriu com outro jogador"
-                end
-
-                DEBUG(
-                    "Trade confirmada com "
-                    .. tostring(v96)
-                )
-
-                v73(
-                    "entregando marretas"
-                )
-
-                local v168,
-                    v164,
-                    v187 =
-                    v158(
-                        v159,
-                        v160
-                    )
-
-                if not v168 then
-                    DEBUG(
-                        "Falha preparando oferta: "
-                        .. tostring(
-                            v187
-                        )
-                    )
-
-                    return false,
-                        v187
-                        or "não consegui preparar a oferta"
-                end
-
-                local MainRemote =
-                    OBTER_MAIN_REMOTE()
-
-                if not MainRemote then
-                    DEBUG(
-                        "MainRemote NÃO encontrado para aceitar"
-                    )
-
-                    return false,
-                        "MainRemote não encontrado"
-                end
-
-                DEBUG(
-                    "Aceitando trade via MainRemote..."
-                )
-
-                local AcceptOK,
-                    v188 =
-                    pcall(function()
-                        MainRemote:FireServer(
-                            "AcceptTradeOffer"
-                        )
-                    end)
-
-                if not AcceptOK then
-                    DEBUG(
-                        "Falha ao aceitar trade: "
-                        .. tostring(
-                            v188
-                        )
-                    )
-
-                    return false,
-                        tostring(
-                            v188
-                        )
-                end
-
-                DEBUG(
-                    "AcceptTradeOffer enviado"
-                )
-
-                local v189 =
-                    v90(
-                        v2.v4,
-                        function()
-                            return not v102(
-                                v159
-                            )
-                        end,
-                        0.12
-                    )
-
-                if not v189 then
-                    DEBUG(
-                        "Trade não fechou dentro do tempo"
-                    )
-
-                    return false,
-                        "cliente não confirmou a trade a tempo"
-                end
-
-                DEBUG(
-                    "Trade fechou"
-                )
-
-                task.wait(
-                    v2.v5
-                )
-
-                local v190 =
-                    v172(
-                        v168
-                    )
-
-                local v191,
-                    v192 =
-                    v149(
-                        v164,
-                        v190
-                    )
-
-                if v191 == false then
-                    DEBUG(
-                        "Estoque não confirmou"
-                    )
-
-                    return false,
-                        "trade fechou mas a entrega não foi confirmada: "
-                        .. tostring(
-                            v192
-                        )
-                end
-
-                v184 += 1
-
-                local v176 =
-                    v81.orderId
-                    .. ":"
-                    .. tostring(
-                        v184
-                    )
-                    .. ":"
-                    .. tostring(
-                        math.floor(
-                            os.clock()
-                            * 1000
-                        )
-                    )
-
-                v174(
-                    v81.orderId,
-                    v176,
-                    v168,
-                    v191 == true
-                    and "trade concluída + estoque conferido"
-                    or tostring(
-                        v192
-                    )
-                )
-
-                DEBUG(
-                    "Progresso salvo na API"
-                )
-
-                v160 =
-                    v179(
-                        v160,
-                        v168
-                    )
-
-                if #v160 > 0 then
-                    v73(
-                        "entrega pendente"
-                    )
-                end
-
-                task.wait(
-                    0.8
-                )
-            end
-
-            v73(
-                "marretas entregues"
-            )
-
-            DEBUG(
-                "TODAS AS TRADES CONCLUÍDAS"
-            )
-
-            return true,
-                "todas as trades concluídas"
-        end)
-
-    v183.ativo = false
-
-    if not v22 then
-        DEBUG(
-            "ERRO INTERNO: "
-            .. tostring(
-                v173
-            )
-        )
-
-        return false,
-            tostring(
-                v173
-            )
-    end
-
-    return v173,
-        v177
-end
-
-local function v194(
-    v175,
-    v91
-)
-    pcall(function()
-        HTTP(
-            "POST",
-            "/api/delivery/"
-            .. v175
-            .. "/release",
-            {
-                retryAfterSeconds =
-                    v91
-                    or 20
-            }
-        )
-    end)
-end
-
-local function v195(
-    v175,
-    v22,
-    v177
-)
-    DEBUG(
-        "Confirmando pedido na API: "
-        .. tostring(
-            v175
-        )
-    )
-
-    return HTTP(
-        "POST",
-        "/api/delivery/"
-        .. v175
-        .. "/confirm",
-        {
-            success = v22,
-            detail =
-                v177
-                or "",
-
-            retryAfterSeconds = 20
-        }
-    )
-end
-
-local function v196()
-    if v13 then
-        return
-    end
-
-    v13 = true
-
-    DEBUG(
-        "================================"
-    )
-
-    DEBUG(
-        "VERIFICANDO NOVO PEDIDO"
-    )
-
-    DEBUG(
-        "Worker: "
-        .. tostring(
-            v2.WORKER
-        )
-    )
-
-    local v22, v197 =
-        pcall(function()
-
-            local v81, v24 =
-                HTTP(
-                    "GET",
-                    "/api/delivery/next?worker="
-                    .. HttpService:UrlEncode(
-                        v2.WORKER
-                    )
-                )
-
-            DEBUG(
-                "Status /delivery/next: "
-                .. tostring(
-                    v24
-                )
-            )
-
-            if v24 == 204 then
-                DEBUG(
-                    "API retornou 204: nenhum pedido disponível"
-                )
-
-                v73(
-                    "aguardando pedidos"
-                )
-
-                return
-            end
-
-            if not v81 then
-                DEBUG(
-                    "API não retornou dados do pedido"
-                )
-
-                v73(
-                    "aguardando pedidos"
-                )
-
-                return
-            end
-
-            DEBUG(
-                "Pedido recebido da API"
-            )
-
-            if not v81.nick then
-                v81.nick =
-                    v81.username
-                    or v81.playerName
-                    or v81.robloxUsername
-            end
-
-            if v81.orderId then
-                DEBUG(
-                    "OrderID: "
-                    .. tostring(
-                        v81.orderId
-                    )
-                )
-            else
-                DEBUG(
-                    "ERRO: orderId ausente"
-                )
-            end
-
-            if v81.nick then
-                DEBUG(
-                    "Cliente: "
-                    .. tostring(
-                        v81.nick
-                    )
-                )
-            else
-                DEBUG(
-                    "ERRO: nick ausente"
-                )
-            end
-
-            if not v81.orderId
-                or not v81.nick then
-
-                warn(
-                    "[KyanStore] pedido inválido"
-                )
-
-                return
-            end
-
-            v80(v81)
-
-            DEBUG(
-                "Itens no pedido: "
-                .. tostring(
-                    #(v81.items or {})
-                )
-            )
-
-            local v103 =
-                v95(
-                    v81.nick
-                )
-
-            if not v103 then
-                DEBUG(
-                    "CLIENTE NÃO ESTÁ NO SERVIDOR"
-                )
-
-                v73(
-                    "aguardando pedidos"
-                )
-
-                v194(
-                    v81.orderId,
-                    20
-                )
-
-                return
-            end
-
-            DEBUG(
-                "CLIENTE ENCONTRADO NO SERVIDOR"
-            )
-
-            print(
-                "[KyanStore] entrega:",
-                v81.orderId,
-                "->",
-                v81.nick
-            )
-
-            local OK, v177 =
-                v182(v81)
-
-            if OK then
-                DEBUG(
-                    "Entrega concluída. Confirmando..."
-                )
-
-                local v88, v198 =
-                    v195(
-                        v81.orderId,
-                        true,
-                        v177
-                        or "entrega concluída"
-                    )
-
-                DEBUG(
-                    "Status confirmação: "
-                    .. tostring(
-                        v198
-                    )
-                )
-
-                if v198
-                    and v198 >= 200
-                    and v198 < 300 then
-
-                    v73(
-                        "marretas entregues"
-                    )
-
-                    DEBUG(
-                        "PEDIDO CONFIRMADO COM SUCESSO"
-                    )
-
-                    task.wait(
-                        2
-                    )
-
-                    v80(nil)
-
-                    v73(
-                        "aguardando pedidos"
-                    )
-                else
-                    DEBUG(
-                        "API NÃO CONFIRMOU O PEDIDO"
-                    )
-
-                    warn(
-                        "[KyanStore] API não confirmou:",
-                        v198
-                    )
-                end
-            else
-                DEBUG(
-                    "ENTREGA FALHOU: "
-                    .. tostring(
-                        v177
-                    )
-                )
-
-                v73(
-                    "aguardando pedidos"
-                )
-
-                v195(
-                    v81.orderId,
-                    false,
-                    v177
-                    or "trade falhou"
-                )
-
-                warn(
-                    "[KyanStore] entrega pausada:",
-                    v177
-                )
-            end
-        end)
-
-    if not v22 then
-        DEBUG(
-            "ERRO NO PROCESSO PRINCIPAL: "
-            .. tostring(
-                v197
-            )
-        )
-
-        warn(
-            "[KyanStore] erro:",
-            v197
-        )
-    end
-
-    DEBUG(
-        "FIM DA VERIFICAÇÃO"
-    )
-
-    DEBUG(
-        "================================"
-    )
-
-    v13 = false
-end
-
-print(
-    "[KyanStore] worker iniciado como",
-    v12.Name
-)
-
-DEBUG(
-    "Worker iniciado: "
-    .. tostring(
-        v12.Name
-    )
-)
-
-DEBUG(
-    "Aguardando pedidos da API..."
-)
-
-task.spawn(function()
-    local ultimaSync = 0
-    local ultimaTentativa = 0
-
-    while true do
-        task.wait(5)
-
-        local agora =
-            os.time()
-
-        local solicitado = false
-
-        pcall(function()
-            solicitado =
-                FOI_SOLICITADO()
-        end)
-
-        local automatico =
-            agora - ultimaSync >= 60
-
-        if solicitado
-            or (
-                automatico
-                and agora - ultimaTentativa >= 30
-            ) then
-
-            ultimaTentativa =
-                agora
-
-            local ok, resultado =
-                pcall(
-                    SINCRONIZAR
-                )
-
-            if ok
-                and resultado then
-
-                ultimaSync =
-                    agora
-            end
-
-            if v14.v72 then
-                if ok
-                    and resultado then
-
-                    v14.v72.Text =
-                        "worker ativo • estoque sincronizado • aguardando pedidos"
-
-                elseif ok then
-
-                    v14.v72.Text =
-                        "worker ativo • estoque: abra o inventario nas marretas • aguardando pedidos"
-
-                else
-
-                    v14.v72.Text =
-                        "worker ativo • estoque: erro na sincronizacao • aguardando pedidos"
-                end
-            end
-        end
-    end
+local VirtualUser = safe(function()
+	return game:GetService("VirtualUser")
 end)
 
-while task.wait(
-    v2.INTERVALO
-) do
-    v196()
+local function aviso(titulo, texto, duracao)
+	safe(function()
+		StarterGui:SetCore("SendNotification", {
+			Title = tostring(titulo),
+			Text = tostring(texto),
+			Duration = duracao or 4,
+		})
+	end)
 end
+
+local function log(texto)
+	print("[Farm+Guarda] " .. tostring(texto))
+end
+
+local function getRig()
+	local char = LocalPlayer.Character
+	if not char or not char.Parent then
+		return nil, nil, nil
+	end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hum or not hrp or hum.Health <= 0 then
+		return nil, nil, nil
+	end
+	return char, hum, hrp
+end
+
+-- se ja tinha uma versao rodando, manda parar (evita dois controlando o corpo)
+do
+	local anterior = safe(function()
+		return getgenv().MM2FarmGuarda
+	end)
+	if type(anterior) == "table" and type(anterior.desligar) == "function" then
+		pcall(anterior.desligar)
+	end
+end
+
+--=============================================================================
+-- 3) ESTADO
+--=============================================================================
+local estado = {
+	ativo         = true,
+	farmLigado    = false,
+	guarda        = true,    -- ja comeca vigiando (e segurando estatico)
+	travado       = false,
+	modoDePe      = false,
+	fugindo       = false,
+	resetando     = false,
+	situacao      = "carregando",
+	murder        = nil,
+	souMurder     = false,
+	temArma       = false,   -- alguem com a arma do xerife = partida rolando
+	emPartida     = false,   -- detectou partida de verdade (nao lobby)
+	dist          = math.huge,
+	distVertical  = math.huge,
+	mesmaAltura   = false,   -- murder no mesmo andar/nivel?
+	temVisao      = false,   -- da pra ver o murder (sem parede no meio)?
+	jogo          = nil,     -- valor do contador de moedas do jogo (se existir)
+	jogoBase      = nil,     -- valor do contador no inicio da contagem
+	jogoMudou     = false,   -- o contador do jogo ja mudou? (senao usa o script)
+	semPartidaDesde = nil,   -- desde quando ele nao detecta partida
+	bolsaZerada   = false,   -- ja zerou a bolsa nesse intervalo?
+	moedas        = 0,       -- bolsa (zera quando reseta)
+	total         = 0,       -- total da sessao
+	alvo          = nil,
+	posTrava      = nil,
+	semMoedaDesde = os.clock(),
+	ultimaFuga    = 0,
+	ultimoPerigo  = 0,
+	noclipLigado  = false,
+	coletadas     = {},
+	ignoradas     = {},
+	pendentes     = {},      -- [moeda] = hora do toque (confirmando se sumiu)
+}
+
+local Ui = {}
+
+local BG       = Color3.fromRGB(22, 22, 28)
+local BG2      = Color3.fromRGB(34, 34, 43)
+local TEXT     = Color3.fromRGB(236, 236, 245)
+local TEXT_DIM = Color3.fromRGB(150, 150, 168)
+local VERDE    = Color3.fromRGB(0, 200, 130)
+local NEON     = Color3.fromRGB(0, 255, 90)
+local CINZA    = Color3.fromRGB(70, 70, 84)
+local LARANJA  = Color3.fromRGB(235, 150, 60)
+local VERMELHO = Color3.fromRGB(220, 60, 70)
+
+--=============================================================================
+-- 4) NOCLIP CONTINUO + CONTROLE DO HUMANOID
+--=============================================================================
+local colisaoOriginal = {}
+
+local function aplicarNoclip()
+	local char = LocalPlayer.Character
+	if not char then
+		return
+	end
+	local partes = char:GetDescendants()
+	for i = 1, #partes do
+		local d = partes[i]
+		if d:IsA("BasePart") and d.CanCollide then
+			colisaoOriginal[d] = true
+			pcall(function()
+				d.CanCollide = false
+			end)
+		end
+	end
+end
+
+local function restaurarColisao()
+	for inst in pairs(colisaoOriginal) do
+		if inst.Parent then
+			pcall(function()
+				inst.CanCollide = true
+			end)
+		end
+	end
+	colisaoOriginal = {}
+end
+
+local function prepararVoo(hum, hrp)
+	if hum then
+		pcall(function()
+			hum.PlatformStand = true
+			if hum:GetState() ~= Enum.HumanoidStateType.Physics then
+				hum:ChangeState(Enum.HumanoidStateType.Physics)
+			end
+		end)
+	end
+	if hrp then
+		pcall(function()
+			hrp.CanCollide = false
+		end)
+	end
+end
+
+local function devolverControle()
+	local _, hum = getRig()
+	if hum then
+		safe(function()
+			hum.PlatformStand = false
+		end)
+		safe(function()
+			hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end)
+		safe(function()
+			hum:ChangeState(Enum.HumanoidStateType.Running)
+		end)
+	end
+end
+
+local passosNoclip = 0
+RunService.Stepped:Connect(function()
+	if not estado.noclipLigado then
+		return
+	end
+
+	aplicarNoclip()
+
+	passosNoclip = passosNoclip + 1
+	if passosNoclip % 20 == 0 and not estado.modoDePe then
+		local _, hum, hrp = getRig()
+		if hum and (estado.travado or estado.fugindo) then
+			prepararVoo(hum, hrp)
+		end
+	end
+end)
+
+--=============================================================================
+-- 5) CHAO
+--=============================================================================
+local function acharChaoAbaixo(posicao)
+	local params = RaycastParams.new()
+	pcall(function()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+	end)
+	local char = LocalPlayer.Character
+	if char then
+		pcall(function()
+			params.FilterDescendantsInstances = { char }
+		end)
+	end
+	pcall(function()
+		params.IgnoreWater = true
+	end)
+
+	local resultado = safe(function()
+		return Workspace:Raycast(posicao, Vector3.new(0, -300, 0), params)
+	end)
+	if resultado then
+		return resultado.Position
+	end
+	return nil
+end
+
+--=============================================================================
+-- 6) MURDER: DETECCAO E DESTAQUE VERDE NEON
+--=============================================================================
+local destaque = { char = nil, highlight = nil, billboard = nil }
+
+local function limparDestaque()
+	if destaque.highlight then
+		pcall(function()
+			destaque.highlight:Destroy()
+		end)
+	end
+	if destaque.billboard then
+		pcall(function()
+			destaque.billboard:Destroy()
+		end)
+	end
+	destaque.char = nil
+	destaque.highlight = nil
+	destaque.billboard = nil
+end
+
+local function aplicarDestaque(plr)
+	local char = plr and plr.Character
+	if not char or not char.Parent then
+		limparDestaque()
+		return
+	end
+	if destaque.char == char and destaque.highlight and destaque.highlight.Parent then
+		return
+	end
+
+	limparDestaque()
+
+	pcall(function()
+		local h = Instance.new("Highlight")
+		h.Name = "MurderNeon"
+		h.FillColor = CONFIG.corNeon
+		h.FillTransparency = 0.45
+		h.OutlineColor = CONFIG.corNeon
+		h.OutlineTransparency = 0
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		h.Adornee = char
+		h.Parent = char
+		destaque.highlight = h
+	end)
+
+	if CONFIG.mostrarTag then
+		pcall(function()
+			local alvo = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart") or char
+			local gui = Instance.new("BillboardGui")
+			gui.Name = "MurderTag"
+			gui.Size = UDim2.new(0, 92, 0, 24)
+			gui.StudsOffset = Vector3.new(0, 2.6, 0)
+			gui.AlwaysOnTop = true
+			gui.MaxDistance = 250
+			gui.Adornee = alvo
+			gui.Parent = alvo
+
+			local label = Instance.new("TextLabel")
+			label.Size = UDim2.new(1, 0, 1, 0)
+			label.BackgroundTransparency = 1
+			label.Font = Enum.Font.GothamBold
+			label.TextSize = 14
+			label.TextColor3 = CONFIG.corNeon
+			label.TextStrokeTransparency = 0.4
+			label.Text = "MURDER"
+			label.Parent = gui
+
+			destaque.billboard = gui
+		end)
+	end
+
+	destaque.char = char
+end
+
+local function nomeCombinaLista(nome, lista)
+	local n = string.lower(tostring(nome))
+	for _, padrao in ipairs(lista) do
+		if string.find(n, padrao, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function temFerramenta(plr, padroes)
+	local char = plr.Character
+	if char then
+		for _, obj in ipairs(char:GetChildren()) do
+			if obj:IsA("Tool") and nomeCombinaLista(obj.Name, padroes) then
+				return true
+			end
+		end
+	end
+
+	local bp = plr:FindFirstChildOfClass("Backpack")
+	if bp then
+		for _, obj in ipairs(bp:GetChildren()) do
+			if obj:IsA("Tool") and nomeCombinaLista(obj.Name, padroes) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function temFaca(plr)
+	return temFerramenta(plr, CONFIG.padroesFaca)
+end
+
+local function temArma(plr)
+	return temFerramenta(plr, CONFIG.padroesArma)
+end
+
+local function temAtributoMurder(plr)
+	local alvos = { plr }
+	if plr.Character then
+		table.insert(alvos, plr.Character)
+	end
+
+	for _, obj in ipairs(alvos) do
+		local ok, attrs = pcall(function()
+			return obj:GetAttributes()
+		end)
+		if ok and type(attrs) == "table" then
+			for nome, valor in pairs(attrs) do
+				if valor == true then
+					local n = string.lower(tostring(nome))
+					if string.find(n, "murder", 1, true) or string.find(n, "assassin", 1, true) then
+						return true
+					end
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+-- varre os jogadores UMA vez e devolve:
+--   murder = quem esta com a faca (ou atributo de murder)
+--   arma   = se tem a arma do xerife no mapa (partida rolando)
+local function varrerPapeis()
+	local murder = nil
+	local arma = false
+	local jogadores = Players:GetPlayers()
+
+	for i = 1, #jogadores do
+		local plr = jogadores[i]
+
+		local okA, gun = pcall(function()
+			return temArma(plr)
+		end)
+		if okA and gun then
+			arma = true
+		end
+
+		if plr ~= LocalPlayer then
+			local okF, faca = pcall(function()
+				return temFaca(plr) or temAtributoMurder(plr)
+			end)
+			if okF and faca and not murder then
+				murder = plr
+			end
+		end
+	end
+
+	return murder, arma
+end
+
+local function souMurder()
+	local ok, eh = pcall(function()
+		return temFaca(LocalPlayer) or temAtributoMurder(LocalPlayer)
+	end)
+	return ok and eh == true
+end
+
+--=============================================================================
+-- 7) MOEDAS: DETECCAO E VALIDACAO
+--=============================================================================
+local moedas    = {}
+local moedasSet = {}
+
+local function nomeCombina(nome)
+	local n = string.lower(tostring(nome))
+	for _, padrao in ipairs(CONFIG.padroesNome) do
+		if string.find(n, padrao, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function temVisualDeMoeda(parte)
+	local ok, desc = pcall(function()
+		return parte:GetDescendants()
+	end)
+	if ok then
+		for _, d in ipairs(desc) do
+			if d:IsA("BasePart")
+				and string.find(string.lower(tostring(d.Name)), "visual", 1, true) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function ehMoeda(parte)
+	if not parte:IsA("BasePart") then
+		return false
+	end
+	if not parte:IsDescendantOf(Workspace) then
+		return false
+	end
+
+	local char = LocalPlayer.Character
+	if char and parte:IsDescendantOf(char) then
+		return false
+	end
+
+	local cam = Workspace.CurrentCamera
+	if cam and parte:IsDescendantOf(cam) then
+		return false
+	end
+
+	-- moeda do MM2 e Coin_Server com um CoinVisual dentro. O visual e o
+	-- "CoinContainer" NAO sao moedas — so a Coin_Server e.
+	local nomeParte = string.lower(tostring(parte.Name))
+	if string.find(nomeParte, "visual", 1, true)
+		or string.find(nomeParte, "container", 1, true) then
+		return false
+	end
+
+	if not nomeCombina(parte.Name) then
+		local pai0 = parte.Parent
+		if not (pai0 and pai0 ~= Workspace and nomeCombina(pai0.Name)) then
+			return false
+		end
+	end
+
+	-- so aceita moeda "de verdade": tem CoinVisual dentro ou esta dentro de um
+	-- CoinContainer. Decoracao do mapa com "coin" no nome fica de fora.
+	if CONFIG.exigirCaraDeMoeda then
+		local pai = parte.Parent
+		local dentroDeContainer = pai and pai ~= Workspace
+			and string.find(string.lower(tostring(pai.Name)), "container", 1, true) ~= nil
+
+		if not temVisualDeMoeda(parte) and not dentroDeContainer then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function moedaExiste(moeda)
+	if not moeda or not moeda.Parent then
+		return false
+	end
+	local ok, noMapa = pcall(moeda.IsDescendantOf, moeda, Workspace)
+	return ok and noMapa == true
+end
+
+local function temAtributoColetada(moeda)
+	local ok, attrs = pcall(function()
+		return moeda:GetAttributes()
+	end)
+	if not ok or type(attrs) ~= "table" then
+		return false
+	end
+	for nome, valor in pairs(attrs) do
+		if valor == true then
+			local n = string.lower(tostring(nome))
+			if string.find(n, "collect", 1, true)
+				or string.find(n, "taken", 1, true)
+				or string.find(n, "grabbed", 1, true) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+-- visivel = a propria peca OU uma casca visivel dentro dela (CoinVisual).
+-- A Coin_Server pode ser invisivel (hitbox) e mesmo assim ser a moeda de
+-- verdade; antes o filtro de transparencia matava ela.
+local function moedaVisivel(moeda)
+	local ok, transparencia, transparenciaLocal = pcall(function()
+		return moeda.Transparency, moeda.LocalTransparencyModifier
+	end)
+	if not ok then
+		return false
+	end
+
+	if (transparencia or 0) < 0.99 and (transparenciaLocal or 0) < 0.99 then
+		return true
+	end
+
+	local okDesc, desc = pcall(function()
+		return moeda:GetDescendants()
+	end)
+	if okDesc then
+		for _, d in ipairs(desc) do
+			if d:IsA("BasePart") then
+				local okT, t = pcall(function()
+					return d.Transparency
+				end)
+				if okT and (t or 0) < 0.99 then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+-- a moeda (ou a casca visivel dela) tem que aceitar toque
+local function moedaTocavel(moeda)
+	local ok, canTouch = pcall(function()
+		return moeda.CanTouch
+	end)
+	if ok and canTouch then
+		return true
+	end
+
+	local okDesc, desc = pcall(function()
+		return moeda:GetDescendants()
+	end)
+	if okDesc then
+		for _, d in ipairs(desc) do
+			if d:IsA("BasePart") then
+				local ok2, ct = pcall(function()
+					return d.CanTouch
+				end)
+				if ok2 and ct then
+					return true
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+local function moedaValida(moeda)
+	if not moedaExiste(moeda) then
+		return false
+	end
+
+	local pegueiEm = estado.coletadas[moeda]
+	if pegueiEm and (os.clock() - pegueiEm) < (CONFIG.cooldownColeta or 10) then
+		return false
+	end
+
+	if estado.ignoradas[moeda] then
+		return false
+	end
+	if temAtributoColetada(moeda) then
+		return false
+	end
+
+	if not moedaTocavel(moeda) then
+		return false
+	end
+
+	if not moedaVisivel(moeda) then
+		return false
+	end
+
+	if moeda.Size and (moeda.Size.X < 0.05 or moeda.Size.Y < 0.05 or moeda.Size.Z < 0.05) then
+		return false
+	end
+
+	return true
+end
+
+local function registrarMoeda(inst)
+	if moedasSet[inst] or estado.ignoradas[inst] then
+		return
+	end
+	if not ehMoeda(inst) then
+		return
+	end
+	moedasSet[inst] = true
+	table.insert(moedas, inst)
+
+	if CONFIG.debugRemotes then
+		print("[CoinFarm] moeda registrada: " .. inst:GetFullName())
+	end
+end
+
+local function limparMoedas()
+	for i = #moedas, 1, -1 do
+		local m = moedas[i]
+		if not m or not m.Parent then
+			if m then
+				moedasSet[m] = nil
+				estado.coletadas[m] = nil
+				estado.ignoradas[m] = nil
+			end
+			table.remove(moedas, i)
+		end
+	end
+end
+
+-- escolhe a melhor moeda: perto de mim e LONGE do murder.
+-- Sem murder (ou sendo eu o murder), e a mais perto mesmo.
+local function proximaMoeda()
+	limparMoedas()
+
+	local _, _, hrp = getRig()
+	if not hrp then
+		return nil
+	end
+
+	local origem = hrp.Position
+
+	local posMurder = nil
+	if estado.murder and estado.murder.Character then
+		local mhrp = estado.murder.Character:FindFirstChild("HumanoidRootPart")
+		if mhrp then
+			posMurder = mhrp.Position
+		end
+	end
+
+	local raio = CONFIG.raioPerigoMoeda or 45
+	local peso = CONFIG.pesoMoedaLongeMurder or 2
+	local melhor, melhorNota = nil, -math.huge
+
+	for _, m in ipairs(moedas) do
+		if moedaValida(m) then
+			local okD, d = pcall(function()
+				return (m.Position - origem).Magnitude
+			end)
+
+			if okD and d and d <= CONFIG.distanciaMaxima then
+				-- comeca punindo a distancia ate mim (perto e bom)
+				local nota = -d
+
+				if posMurder then
+					local okM, dM = pcall(function()
+						return (m.Position - posMurder).Magnitude
+					end)
+					if okM and dM then
+						-- longe do murder soma pontos
+						nota = nota + math.min(dM, 150) * peso
+						-- perto do murder perde MUITO ponto
+						if dM < raio then
+							nota = nota - (raio - dM) * 5
+						end
+					end
+				end
+
+				if nota > melhorNota then
+					melhor, melhorNota = m, nota
+				end
+			end
+		end
+	end
+
+	return melhor
+end
+
+local function contarMoedasBoas()
+	limparMoedas()
+
+	local _, _, hrp = getRig()
+	local origem = hrp and hrp.Position or nil
+	local total = 0
+
+	for _, m in ipairs(moedas) do
+		if moedaValida(m) then
+			if not origem then
+				total = total + 1
+			else
+				local ok, d = pcall(function()
+					return (m.Position - origem).Magnitude
+				end)
+				if ok and d and d <= CONFIG.distanciaMaxima then
+					total = total + 1
+				end
+			end
+		end
+	end
+
+	return total
+end
+
+-- tem alguma moeda de verdade (visivel e valida) dentro do raio?
+local function temMoedaPerto(distMax)
+	local _, _, hrp = getRig()
+	if not hrp then
+		return false
+	end
+
+	local origem = hrp.Position
+	local limite = distMax or CONFIG.distanciaMaxima
+
+	for _, m in ipairs(moedas) do
+		if moedaValida(m) then
+			local ok, d = pcall(function()
+				return (m.Position - origem).Magnitude
+			end)
+			if ok and d and d <= limite then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+--=============================================================================
+-- 7.1) CONTADOR DE MOEDAS DO JOGO (leaderstats / atributo / ProfileData)
+--=============================================================================
+-- O script conta as moedas que ele mesmo confirma, mas o ideal e ler o numero
+-- do proprio jogo. Fontes, em ordem:
+--   1) leaderstats (IntValue/NumberValue com nome de moeda)
+--   2) atributo do Player
+--   3) ReplicatedStorage.Modules.ProfileData (a tabela viva que o jogo usa)
+--   (e o GetProfileData/RemoteEvents aparecem no F9 com debugRemotes = true)
+local contadorJogo = nil
+
+local PADROES_CONTADOR = { "coin", "moeda", "currency", "cash", "candy", "candie" }
+
+local function caminhoEhContador(caminho)
+	local n = string.lower(caminho)
+	for _, p in ipairs(PADROES_CONTADOR) do
+		if string.find(n, p, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function scanMoedasNaTabela(tbl, depth, prefixo, achados, visitados)
+	if type(tbl) ~= "table" or depth > 4 then
+		return
+	end
+	if visitados[tbl] then
+		return
+	end
+	visitados[tbl] = true
+
+	for k, v in pairs(tbl) do
+		if type(k) == "string" then
+			local caminho = prefixo .. k
+
+			if type(v) == "number" then
+				if caminhoEhContador(caminho) then
+					achados[#achados + 1] = {
+						caminho = caminho,
+						tabela = tbl,
+						chave = k,
+					}
+				end
+			elseif type(v) == "table" then
+				scanMoedasNaTabela(v, depth + 1, caminho .. ".", achados, visitados)
+			end
+		end
+	end
+end
+
+local function requireSeguro(inst)
+	if not inst or not inst:IsA("ModuleScript") then
+		return nil
+	end
+	local ok, res = pcall(require, inst)
+	if ok and type(res) == "table" then
+		return res
+	end
+	return nil
+end
+
+local function acharPerfil()
+	local rs = game:GetService("ReplicatedStorage")
+
+	local mods = rs:FindFirstChild("Modules")
+	if mods then
+		local p = requireSeguro(mods:FindFirstChild("ProfileData"))
+		if p then
+			return p
+		end
+	end
+
+	local p = requireSeguro(rs:FindFirstChild("ProfileData"))
+	if p then
+		return p
+	end
+
+	local ms = rs:FindFirstChild("ModuleScripts")
+	if ms then
+		p = requireSeguro(ms:FindFirstChild("ProfileData"))
+		if p then
+			return p
+		end
+	end
+
+	-- fallback: qualquer ModuleScript com "profile"/"playerdata" no nome
+	local tentativas = 0
+	for _, inst in ipairs(rs:GetDescendants()) do
+		if inst:IsA("ModuleScript") and tentativas < 25 then
+			local n = string.lower(inst.Name)
+			if string.find(n, "profile", 1, true) or string.find(n, "playerdata", 1, true) then
+				tentativas = tentativas + 1
+				local res = requireSeguro(inst)
+				if res then
+					return res
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local function acharContadorJogo()
+	-- 1) leaderstats
+	local ls = LocalPlayer:FindFirstChild("leaderstats")
+	if ls then
+		for _, v in ipairs(ls:GetChildren()) do
+			if (v:IsA("IntValue") or v:IsA("NumberValue"))
+				and nomeCombinaLista(v.Name, CONFIG.padroesNome) then
+				return { tipo = "valor", inst = v, nome = v.Name }
+			end
+		end
+	end
+
+	-- 2) atributo do Player
+	local ok, attrs = pcall(function()
+		return LocalPlayer:GetAttributes()
+	end)
+	if ok and type(attrs) == "table" then
+		for nome, valor in pairs(attrs) do
+			if type(valor) == "number" and nomeCombinaLista(nome, CONFIG.padroesNome) then
+				return { tipo = "atributo", nome = nome }
+			end
+		end
+	end
+
+	-- 3) perfil ao vivo do jogo (a mesma tabela da GUI do MM2)
+	local perfil = acharPerfil()
+	if perfil then
+		local achados = {}
+		scanMoedasNaTabela(perfil, 1, "", achados, {})
+
+		if #achados > 0 then
+			-- prefere Candies (moeda do evento), depois Coins
+			local melhor, melhorPeso = nil, -1
+			for _, a in ipairs(achados) do
+				local caminho = string.lower(a.caminho)
+				local peso = 1
+				if string.find(caminho, "candies", 1, true) or string.find(caminho, "candy", 1, true) then
+					peso = 4
+				elseif string.find(caminho, "coins", 1, true) then
+					peso = 3
+				elseif string.find(caminho, "coin", 1, true) then
+					peso = 2
+				end
+
+				if peso > melhorPeso
+					or (peso == melhorPeso and melhor and #a.caminho < #melhor.caminho) then
+					melhor, melhorPeso = a, peso
+				end
+			end
+
+			if melhor then
+				return {
+					tipo = "tabela",
+					tabela = melhor.tabela,
+					chave = melhor.chave,
+					caminho = melhor.caminho,
+				}
+			end
+		end
+	end
+
+	return nil
+end
+
+local function lerContadorJogo()
+	if not contadorJogo then
+		return nil
+	end
+
+	if contadorJogo.tipo == "atributo" then
+		local ok, v = pcall(function()
+			return LocalPlayer:GetAttribute(contadorJogo.nome)
+		end)
+		if ok and type(v) == "number" then
+			return v
+		end
+		return nil
+	end
+
+	if contadorJogo.tipo == "valor" then
+		local ok, v = pcall(function()
+			return contadorJogo.inst.Value
+		end)
+		if ok and type(v) == "number" then
+			return v
+		end
+		return nil
+	end
+
+	if contadorJogo.tipo == "tabela" then
+		local ok, v = pcall(function()
+			return contadorJogo.tabela[contadorJogo.chave]
+		end)
+		if ok and type(v) == "number" then
+			return v
+		end
+		return nil
+	end
+
+	return nil
+end
+
+-- A "bolsa da partida" pelo contador do jogo e a DIFERENCA desde o comeco
+-- (o jogo guarda o total; a partida e a variacao). Se o contador nunca mexer,
+-- continua valendo a contagem do proprio script.
+local function atualizarContadorJogo()
+	local v = lerContadorJogo()
+
+	if v == nil then
+		estado.jogo = nil
+		return
+	end
+
+	estado.jogo = v
+
+	if estado.jogoBase == nil then
+		estado.jogoBase = v
+		return
+	end
+
+	local delta = v - estado.jogoBase
+	if delta < 0 then
+		estado.jogoBase = v
+		delta = 0
+	end
+
+	if delta > 0 then
+		estado.jogoMudou = true
+	end
+
+	if CONFIG.usarContadorJogo and estado.jogoMudou then
+		estado.moedas = math.floor(delta + 0.5)
+	end
+end
+
+-- o jogo manda ChangeInventoryItem("Materials", "Candies2026", novoTotal) a
+-- cada moeda: e o contador mais direto que existe (o log do espiao mostrou)
+local function hookarContadorPorRemote()
+	local rs = game:GetService("ReplicatedStorage")
+
+	for _, inst in ipairs(rs:GetDescendants()) do
+		if inst:IsA("RemoteEvent") and string.lower(inst.Name) == "changeinventoryitem" then
+			pcall(function()
+				inst.OnClientEvent:Connect(function(material, item, total)
+					if type(total) ~= "number" then
+						return
+					end
+
+					local alvo = string.lower(tostring(material)) .. " " .. string.lower(tostring(item))
+					if not (string.find(alvo, "candie", 1, true) or string.find(alvo, "coin", 1, true)) then
+						return
+					end
+
+					if estado.jogoBase == nil then
+						estado.jogoBase = total
+						estado.jogo = total
+						return
+					end
+
+					local delta = total - estado.jogoBase
+					if delta < 0 then
+						estado.jogoBase = total
+						delta = 0
+					end
+
+					estado.jogo = total
+					if delta > 0 then
+						estado.jogoMudou = true
+					end
+					if CONFIG.usarContadorJogo and estado.jogoMudou then
+						estado.moedas = math.floor(delta + 0.5)
+					end
+				end)
+			end)
+			print("[Farm+Guarda] contador via remote: " .. inst:GetFullName())
+			return
+		end
+	end
+end
+
+-- sniffer opcional: mostra no F9 os remotes de moeda que o jogo dispara
+local function farejarRemotes()
+	if not CONFIG.debugRemotes then
+		return
+	end
+
+	local rs = game:GetService("ReplicatedStorage")
+
+	for _, inst in ipairs(rs:GetDescendants()) do
+		if inst:IsA("RemoteEvent") then
+			local n = string.lower(inst.Name)
+			local interessante = string.find(n, "coin", 1, true)
+				or string.find(n, "moeda", 1, true)
+				or string.find(n, "collect", 1, true)
+				or string.find(n, "reward", 1, true)
+			if interessante then
+				print("[CoinFarm][remote] encontrado: " .. inst:GetFullName())
+				pcall(function()
+					inst.OnClientEvent:Connect(function(...)
+						local args = { ... }
+						local partes = {}
+						for i = 1, math.min(#args, 4) do
+							partes[#partes + 1] = tostring(args[i])
+						end
+						print("[CoinFarm][remote] " .. inst.Name .. " -> " .. table.concat(partes, ", "))
+					end)
+				end)
+			end
+		end
+	end
+end
+
+--=============================================================================
+-- 8) MARCA DO ALVO (moeda vermelha + linha)
+--=============================================================================
+local marca = {
+	moeda = nil,
+	highlight = nil,
+	selection = nil,
+	beam = nil,
+	attPersonagem = nil,
+	attMoeda = nil,
+}
+
+local function limparMarca()
+	if marca.highlight then
+		pcall(function()
+			marca.highlight:Destroy()
+		end)
+	end
+	if marca.selection then
+		pcall(function()
+			marca.selection:Destroy()
+		end)
+	end
+	if marca.beam then
+		pcall(function()
+			marca.beam:Destroy()
+		end)
+	end
+	if marca.attPersonagem then
+		pcall(function()
+			marca.attPersonagem:Destroy()
+		end)
+	end
+	if marca.attMoeda then
+		pcall(function()
+			marca.attMoeda:Destroy()
+		end)
+	end
+	marca.moeda = nil
+	marca.highlight = nil
+	marca.selection = nil
+	marca.beam = nil
+	marca.attPersonagem = nil
+	marca.attMoeda = nil
+end
+
+-- acha a peca que realmente aparece na tela (a moeda pode ser um hitbox
+-- invisivel com um CoinVisual visivel dentro)
+local function parteVisivelDentro(moeda)
+	local ok, t = pcall(function()
+		return moeda.Transparency
+	end)
+	if ok and (t or 0) < 0.99 then
+		return moeda
+	end
+
+	local okD, desc = pcall(function()
+		return moeda:GetDescendants()
+	end)
+	if okD then
+		for _, d in ipairs(desc) do
+			if d:IsA("BasePart") then
+				local ok2, t2 = pcall(function()
+					return d.Transparency
+				end)
+				if ok2 and (t2 or 0) < 0.99 then
+					return d
+				end
+			end
+		end
+	end
+
+	return moeda
+end
+
+local function marcarAlvo(moeda)
+	limparMarca()
+
+	local _, _, hrp = getRig()
+	if not hrp or not moeda or not moeda.Parent then
+		return
+	end
+
+	local cor = Color3.fromRGB(255, 45, 45)
+	local adornado = parteVisivelDentro(moeda)
+
+	local okHighlight = pcall(function()
+		local h = Instance.new("Highlight")
+		h.Name = "FarmAlvo"
+		h.FillColor = cor
+		h.FillTransparency = 0.35
+		h.OutlineColor = cor
+		h.OutlineTransparency = 0
+		h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		h.Adornee = adornado
+		h.Parent = adornado
+		marca.highlight = h
+	end)
+
+	if not okHighlight then
+		pcall(function()
+			local box = Instance.new("SelectionBox")
+			box.Name = "FarmAlvo"
+			box.Adornee = adornado
+			box.Color3 = cor
+			box.LineThickness = 0.06
+			box.SurfaceTransparency = 0.85
+			box.Parent = adornado
+			marca.selection = box
+		end)
+	end
+
+	pcall(function()
+		local a1 = Instance.new("Attachment")
+		a1.Name = "FarmPonta"
+		a1.Parent = hrp
+
+		local a2 = Instance.new("Attachment")
+		a2.Name = "FarmPonta"
+		a2.Parent = adornado
+
+		local beam = Instance.new("Beam")
+		beam.Name = "FarmLinha"
+		beam.Attachment0 = a1
+		beam.Attachment1 = a2
+		beam.Color = ColorSequence.new(cor)
+		beam.LightEmission = 1
+		beam.LightInfluence = 0
+		beam.Width0 = 0.06
+		beam.Width1 = 0.06
+		beam.Segments = 1
+		beam.CurveSize0 = 0
+		beam.CurveSize1 = 0
+		beam.FaceCamera = true
+		beam.Parent = hrp
+
+		marca.beam = beam
+		marca.attPersonagem = a1
+		marca.attMoeda = a2
+	end)
+
+	marca.moeda = moeda
+end
+
+--=============================================================================
+-- 9) VOO
+--=============================================================================
+local vooToken = 0
+
+local function cframeAlvo(posicao, baseCF)
+	local flat = Vector3.new(posicao.X - baseCF.Position.X, 0, posicao.Z - baseCF.Position.Z)
+	if flat.Magnitude > 2 then
+		return CFrame.lookAt(posicao, posicao + flat.Unit)
+	end
+	return CFrame.new(posicao) * (baseCF - baseCF.Position)
+end
+
+local function segurar(cf, duracao)
+	local char = LocalPlayer.Character
+	local t0 = os.clock()
+	while os.clock() - t0 < duracao do
+		if LocalPlayer.Character ~= char then
+			return
+		end
+		local _, _, hrp = getRig()
+		if not hrp then
+			return
+		end
+		-- servidor teleportou? larga o personagem
+		if (hrp.Position - cf.Position).Magnitude > (CONFIG.limiteTeleporte or 40) then
+			return
+		end
+		pcall(function()
+			hrp.CFrame = cf
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end)
+		task.wait()
+	end
+end
+
+-- o murder esta na linha de visao? parede no meio = nao
+local function temVisaoDoMurder(hrp, murder)
+	if not CONFIG.usarVisao then
+		return true
+	end
+	if not hrp or not murder then
+		return false
+	end
+
+	local char = murder.Character
+	if not char then
+		return false
+	end
+
+	local mhrp = char:FindFirstChild("HumanoidRootPart")
+	if not mhrp then
+		return false
+	end
+
+	local origem = hrp.Position + Vector3.new(0, 1.2, 0)
+	local alvo = mhrp.Position + Vector3.new(0, 1.2, 0)
+
+	local params = RaycastParams.new()
+	pcall(function()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+	end)
+	params.FilterDescendantsInstances = { char, LocalPlayer.Character }
+	pcall(function()
+		params.IgnoreWater = true
+	end)
+
+	local resultado = safe(function()
+		return Workspace:Raycast(origem, alvo - origem, params)
+	end)
+
+	if not resultado then
+		return true
+	end
+
+	-- moeda/efeito no meio do caminho nao conta como parede
+	if nomeCombina(resultado.Instance.Name) then
+		return true
+	end
+
+	return false
+end
+
+local function perigoAgora()
+	if not estado.guarda or estado.souMurder or not estado.murder then
+		return false
+	end
+	if estado.mesmaAltura ~= true then
+		return false
+	end
+	if estado.dist > CONFIG.distanciaPerigo then
+		return false
+	end
+
+	-- colado nele: foge mesmo com parede no meio (pode virar a esquina)
+	if estado.dist <= (CONFIG.distanciaPerigoCega or 15) then
+		return true
+	end
+
+	-- de longe so foge se estiver vendo ele (sem parede)
+	return estado.temVisao == true
+end
+
+-- predicado opcional: se devolver false no meio, o voo aborta
+-- opcoes: { velocidade = number, disparado = true }  (disparado = arranque)
+local function voarPara(destino, predicado, opcoes)
+	opcoes = opcoes or {}
+
+	local _, hum, hrp = getRig()
+	if not hrp or not destino then
+		return false
+	end
+
+	vooToken = vooToken + 1
+	local meuToken = vooToken
+
+	local inicio = hrp.CFrame
+	local dist = (destino.Position - inicio.Position).Magnitude
+	if dist < 0.4 then
+		pcall(function()
+			hrp.CFrame = destino
+		end)
+		return true
+	end
+
+	local vel = math.max(tonumber(opcoes.velocidade or CONFIG.velocidade) or 30, 1)
+	if not opcoes.velocidade then
+		vel = vel * (1 + (math.random() * 2 - 1) * (CONFIG.variacaoVelocidade or 0))
+	end
+	local tempo = math.max(dist / vel, 0.05)
+
+	prepararVoo(hum, hrp)
+
+	local ultimo = inicio
+	local t0 = os.clock()
+	while true do
+		if vooToken ~= meuToken or not estado.ativo then
+			return false
+		end
+		if predicado and not predicado() then
+			return false
+		end
+
+		-- o servidor teleportou no meio do voo? aceita e aborta (nunca puxa
+		-- o personagem de volta pro mapa antigo)
+		if (hrp.Position - ultimo.Position).Magnitude > (CONFIG.limiteTeleporte or 40) then
+			return false
+		end
+
+		local a = (os.clock() - t0) / tempo
+		if a >= 1 then
+			break
+		end
+
+		local suave
+		if opcoes.disparado then
+			-- arranque: sai na velocidade maxima e alivia perto do fim
+			suave = 1 - (1 - a) * (1 - a)
+		else
+			suave = a * a * (3 - 2 * a)
+		end
+
+		local alvoCF = inicio:Lerp(destino, suave)
+
+		local ok = pcall(function()
+			hrp.CFrame = alvoCF
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end)
+		if not ok then
+			break
+		end
+		ultimo = alvoCF
+		task.wait()
+	end
+
+	pcall(function()
+		hrp.CFrame = destino
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end)
+
+	return true
+end
+
+local function voarAteAlvo(moeda)
+	local _, _, hrp = getRig()
+	if not hrp or not moeda then
+		return false
+	end
+
+	local destino = cframeAlvo(moeda.Position + Vector3.new(0, CONFIG.alturaAproximacao, 0), hrp.CFrame)
+
+	return voarPara(destino, function()
+		return moedaExiste(moeda)
+			and moedaVisivel(moeda)
+			and estado.farmLigado
+			and not estado.resetando
+			and estado.emPartida
+			and not perigoAgora()
+	end)
+end
+
+--=============================================================================
+-- 10) COLETA
+--=============================================================================
+local function encostarMoeda(moeda, duracao)
+	local char = LocalPlayer.Character
+	local t0 = os.clock()
+
+	while os.clock() - t0 < duracao do
+		if not moedaExiste(moeda) or LocalPlayer.Character ~= char then
+			return
+		end
+		local _, _, hrp = getRig()
+		if not hrp then
+			return
+		end
+		-- se o servidor me teleportou, nao puxa de volta pra moeda
+		if (hrp.Position - moeda.Position).Magnitude > (CONFIG.limiteTeleporte or 40) then
+			return
+		end
+		pcall(function()
+			hrp.CFrame = CFrame.new(moeda.Position) * (hrp.CFrame - hrp.CFrame.Position)
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end)
+		task.wait()
+	end
+end
+
+local fti = firetouchinterest
+
+-- devolve:
+--   "coletada" = sumiu enquanto eu encostava (CONTA como minha)
+--   "pendente" = encostei e ela ainda esta la (confirma no grace period)
+--   "sumiu"    = ja nao existia antes de eu encostar (outro pegou, NAO conta)
+local function coletar(moeda)
+	if not moedaExiste(moeda) or not moedaValida(moeda) then
+		return "sumiu"
+	end
+
+	local antes = moeda.Position
+	local tentativas = 1 + math.max(CONFIG.retentativas or 0, 0)
+
+	for i = 1, tentativas do
+		if not estado.ativo or not estado.farmLigado or estado.resetando then
+			return "pendente"
+		end
+
+		local _, _, hrp = getRig()
+		if not hrp then
+			return "pendente"
+		end
+		if not moedaExiste(moeda) then
+			return "coletada"
+		end
+
+		if CONFIG.usarFiretouch and type(fti) == "function" then
+			pcall(function()
+				fti(hrp, moeda, 0)
+				fti(hrp, moeda, 1)
+			end)
+		end
+
+		encostarMoeda(moeda, CONFIG.esperaColeta)
+
+		if not moedaExiste(moeda) then
+			return "coletada"
+		end
+		if not moedaValida(moeda) then
+			return "coletada"
+		end
+
+		-- moeda que "renasce" em outro lugar tambem foi coletada
+		local okMudou, mudou = pcall(function()
+			return (moeda.Position - antes).Magnitude > 3
+		end)
+		if okMudou and mudou then
+			return "coletada"
+		end
+	end
+
+	return "pendente"
+end
+
+--=============================================================================
+-- 11) TRAVA ESTATICA
+--=============================================================================
+local travaConn = nil
+
+local function soltarTrava()
+	estado.travado = false
+	estado.modoDePe = false
+	estado.posTrava = nil
+	if travaConn then
+		pcall(function()
+			travaConn:Disconnect()
+		end)
+		travaConn = nil
+	end
+end
+
+local function travarEm(cf)
+	soltarTrava()
+
+	estado.posTrava = cf
+	estado.travado = true
+
+	local chao = acharChaoAbaixo(cf.Position)
+	if chao and (cf.Position.Y - chao.Y) <= 6 then
+		-- no chao: fica DE PE, com colisao normal
+		estado.modoDePe = true
+		estado.noclipLigado = false
+		restaurarColisao()
+		devolverControle()
+	else
+		-- no ar: fica travado flutuando (noclip + Physics)
+		estado.modoDePe = false
+		estado.noclipLigado = CONFIG.usarNoclip
+		local _, humAgora, hrpAgora = getRig()
+		prepararVoo(humAgora, hrpAgora)
+	end
+
+	-- Stepped roda ANTES da fisica e depois de aplicar o que veio do servidor:
+	-- se o servidor teleportou, da pra ver o pulo e soltar a trava antes de
+	-- reescrever a posicao antiga.
+	travaConn = RunService.Stepped:Connect(function()
+		if not estado.travado or not estado.posTrava then
+			return
+		end
+		local _, _, hrp = getRig()
+		if not hrp then
+			return
+		end
+
+		-- SE O SERVIDOR TELEPORTOU (entrar no mapa, trocar de partida), aceita
+		-- o lugar novo e solta a trava. NUNCA puxa de volta pro lugar antigo.
+		local d = (hrp.Position - estado.posTrava.Position).Magnitude
+		if d > (CONFIG.limiteTeleporte or 40) then
+			soltarTrava()
+			estado.situacao = "teleporte do servidor - trava solta"
+			return
+		end
+
+		pcall(function()
+			hrp.CFrame = estado.posTrava
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end)
+	end)
+end
+
+local function soltarControle()
+	soltarTrava()
+	estado.noclipLigado = false
+	restaurarColisao()
+	devolverControle()
+end
+
+-- devolve o personagem ao normal se ele estiver preso (plataform stand,
+-- estado Physics ou noclip). Importante no lobby: personagem "preso" pode
+-- atrapalhar o servidor de te teleportar pra partida.
+local function garantirControleNormal(hum)
+	if estado.travado or estado.noclipLigado then
+		soltarControle()
+		return
+	end
+	if not hum then
+		return
+	end
+	if hum.PlatformStand then
+		soltarControle()
+		return
+	end
+	local ok, st = pcall(function()
+		return hum:GetState()
+	end)
+	if ok and st == Enum.HumanoidStateType.Physics then
+		soltarControle()
+	end
+end
+
+--=============================================================================
+-- 12) BOLSA CHEIA -> RESET
+--=============================================================================
+-- valor usado pra bolsa: o do jogo (delta) quando disponivel; senao o script
+local function valorBolsa()
+	if CONFIG.usarContadorJogo and estado.jogoMudou
+		and estado.jogo and estado.jogoBase then
+		local v = estado.jogo - estado.jogoBase
+		if v < 0 then
+			v = 0
+		end
+		return v
+	end
+	return estado.moedas
+end
+
+local function bolsaCheia()
+	local cap = CONFIG.capacidadeBolsa or 0
+	if cap <= 0 then
+		return false
+	end
+	return valorBolsa() >= cap
+end
+
+local function resetar(motivo)
+	if estado.resetando or estado.fugindo then
+		return
+	end
+
+	-- REGRA DE OURO: como murder nunca reseta, fica estatico
+	if estado.souMurder then
+		estado.situacao = "sou o murder - nao reseto"
+		return
+	end
+
+	-- se o murder esta perto, resolver a fuga primeiro
+	if perigoAgora() then
+		return
+	end
+
+	estado.resetando = true
+	estado.situacao = "bolsa cheia - resetando"
+	log("resetando (" .. tostring(motivo) .. ") - bolsa: " .. tostring(estado.moedas))
+
+	estado.alvo = nil
+	limparMarca()
+	soltarControle()
+
+	local charAntes = LocalPlayer.Character
+
+	pcall(function()
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.Health = 0
+		end
+	end)
+
+	pcall(function()
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			char:BreakJoints()
+		end
+	end)
+
+	-- espera o personagem NOVO nascer (nao basta a vida antiga sumir)
+	local t0 = os.clock()
+	while estado.ativo and (os.clock() - t0) < (CONFIG.resetEspera + 6) do
+		local char, hum2 = getRig()
+		if char and char ~= charAntes and hum2 and hum2.Health > 0 then
+			break
+		end
+		task.wait(0.25)
+	end
+
+	estado.moedas = 0
+	estado.jogoBase = nil
+	estado.jogoMudou = false
+	estado.coletadas = {}
+	estado.ignoradas = {}
+	estado.pendentes = {}
+	estado.semMoedaDesde = os.clock()
+	estado.resetando = false
+	estado.situacao = "renasceu - retomando"
+end
+
+-- conta UMA moeda na bolsa (so quando a coleta foi confirmada)
+local function contarMoeda()
+	estado.moedas = estado.moedas + 1
+	estado.total = estado.total + 1
+end
+
+-- partida acabou (lobby/intervalo): a bolsa da partida zera, porque o proximo
+-- round comeca a contar do zero
+local function zerarBolsa()
+	estado.moedas = 0
+	estado.jogoBase = nil
+	estado.jogoMudou = false
+	estado.coletadas = {}
+	estado.ignoradas = {}
+	estado.pendentes = {}
+end
+
+-- moeda que encostamos mas nao sumiu na hora: conta so se ela sumir dentro do
+-- grace period. Se nao sumir, desiste (nao conta) - evita contar moeda que
+-- sumiu sozinha no fim da partida.
+local function verificarPendentes()
+	local agora = os.clock()
+	local grace = CONFIG.graceColeta or 2.5
+
+	for moeda, info in pairs(estado.pendentes) do
+		local t = (type(info) == "table" and info.t) or agora
+
+		if (agora - t) > grace then
+			estado.ignoradas[moeda] = true
+			estado.pendentes[moeda] = nil
+		elseif not moedaExiste(moeda) then
+			estado.pendentes[moeda] = nil
+			estado.coletadas[moeda] = agora
+			contarMoeda()
+		elseif type(info) == "table" and info.pos then
+			-- moeda que se moveu (renasceu) tambem conta
+			local ok, mudou = pcall(function()
+				return (moeda.Position - info.pos).Magnitude > 3
+			end)
+			if ok and mudou then
+				estado.pendentes[moeda] = nil
+				estado.coletadas[moeda] = agora
+				contarMoeda()
+			end
+		end
+	end
+end
+
+--=============================================================================
+-- 13) FUGA
+--=============================================================================
+local function destinoDeFuga(hrp, murder)
+	local minha = hrp.Position
+	local dir = nil
+
+	local mhrp = murder and murder.Character and murder.Character:FindFirstChild("HumanoidRootPart")
+	if mhrp then
+		local d = Vector3.new(minha.X - mhrp.Position.X, 0, minha.Z - mhrp.Position.Z)
+		if d.Magnitude >= 1 then
+			dir = d.Unit
+		end
+	end
+
+	if not dir then
+		local ang = math.random() * math.pi * 2
+		dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
+	end
+
+	local alvo = minha
+		+ dir * CONFIG.distanciaFuga
+		+ Vector3.new(0, CONFIG.subidaFuga, 0)
+
+	return CFrame.lookAt(alvo, alvo + dir)
+end
+
+local function fugir(murder)
+	if estado.fugindo or estado.resetando then
+		return
+	end
+
+	estado.fugindo = true
+	estado.ultimaFuga = os.clock()
+	estado.situacao = "fugindo do murder"
+
+	soltarTrava()
+	estado.noclipLigado = CONFIG.usarNoclip
+
+	local _, hum, hrp = getRig()
+	if not hrp then
+		estado.fugindo = false
+		return
+	end
+	prepararVoo(hum, hrp)
+
+	local destino = destinoDeFuga(hrp, murder)
+	voarPara(destino, function()
+		return estado.guarda and not estado.souMurder
+	end, {
+		velocidade = CONFIG.velocidadeFuga,
+		disparado = true,
+	})
+
+	local _, _, hrpNovo = getRig()
+	if hrpNovo and estado.guarda then
+		travarEm(hrpNovo.CFrame)
+		estado.situacao = "estatico (longe do murder)"
+	end
+
+	estado.fugindo = false
+end
+
+--=============================================================================
+-- 14) PASSO DO FARM (um ciclo)
+--=============================================================================
+local function passoFarm(hum, hrp)
+	if estado.resetando then
+		return
+	end
+
+	-- 0) LOBBY: as moedas do mapa continuam no Workspace, mas sao de outro
+	-- lugar (longe e/ou invisiveis). Nao voa atras delas e NAO TRAVA: trava
+	-- no lobby faz o servidor nao conseguir te teleportar pro mapa.
+	if not estado.emPartida then
+		estado.alvo = nil
+		limparMarca()
+		garantirControleNormal(hum)
+		estado.situacao = "lobby/intermission - esperando a partida"
+		return
+	end
+
+	-- 1) bolsa cheia -> reseta (so durante a partida, nao no lobby)
+	if bolsaCheia() then
+		resetar("bolsa cheia")
+		return
+	end
+
+	local moeda = proximaMoeda()
+
+	if moeda then
+		estado.semMoedaDesde = os.clock()
+
+		-- checagem dupla: se outro jogador pegou a moeda nesse meio tempo,
+		-- nem sai voando pra um lugar vazio
+		task.wait(0.12)
+		if not estado.farmLigado or not estado.emPartida then
+			return
+		end
+		if not moedaExiste(moeda) or not moedaValida(moeda) then
+			estado.coletadas[moeda] = os.clock()
+			return
+		end
+
+		soltarTrava()
+		estado.noclipLigado = CONFIG.usarNoclip
+		estado.alvo = moeda
+		marcarAlvo(moeda)
+		estado.situacao = "voando ate a moeda"
+
+		local chegou = voarAteAlvo(moeda)
+
+		if estado.ativo and estado.farmLigado then
+			if chegou then
+				if moedaExiste(moeda) and moedaValida(moeda) then
+					estado.situacao = "coletando"
+					local resultado = coletar(moeda)
+
+					if resultado == "coletada" then
+						contarMoeda()
+					elseif resultado == "pendente" then
+						-- encostei mas ela ainda nao sumiu: confirma no grace
+						estado.pendentes[moeda] = { t = os.clock(), pos = moeda.Position }
+					end
+				end
+
+				estado.coletadas[moeda] = os.clock()
+			elseif not moedaExiste(moeda) then
+				-- sumiu no meio do voo: ja era de alguem
+				estado.coletadas[moeda] = os.clock()
+			end
+		end
+
+		estado.alvo = nil
+		limparMarca()
+
+		if estado.farmLigado and bolsaCheia() then
+			resetar("bolsa cheia")
+		end
+		return
+	end
+
+	-- 2) sem moeda nenhuma
+	estado.alvo = nil
+	limparMarca()
+
+	if not estado.travado then
+		travarEm(hrp.CFrame)
+	end
+
+	local parado = os.clock() - estado.semMoedaDesde
+
+	if parado >= CONFIG.tempoSemMoeda then
+		-- SEM moeda NAO quer dizer bolsa cheia: pode ser intervalo entre
+		-- partidas, lobby, ou a partida acabou. So reseta se a contagem
+		-- realmente chegou no limite da bolsa.
+		if bolsaCheia() then
+			resetar("bolsa cheia")
+		else
+			estado.situacao = "intervalo/lobby - esperando a partida"
+		end
+	else
+		estado.situacao = "procurando moedas"
+		segurar(hrp.CFrame, 0.15)
+	end
+end
+
+--=============================================================================
+-- 15) MONITOR DO MURDER (roda separado pra nao travar durante o voo)
+--=============================================================================
+local function monitorMurder()
+	while estado.ativo do
+		local ok, murder, arma = pcall(varrerPapeis)
+		if ok then
+			estado.murder = murder
+			estado.temArma = arma == true
+		end
+		estado.souMurder = souMurder()
+
+		-- PARTIDA DE VERDADE? tem faca, tem arma do xerife, eu sou o murder,
+		-- ou tem moeda de verdade (visivel e valida) perto de mim.
+		-- No lobby/intermission nada disso acontece.
+		estado.emPartida = (murder ~= nil)
+			or estado.souMurder
+			or estado.temArma
+			or temMoedaPerto(CONFIG.distanciaMaxima)
+
+		-- ficou tempo suficiente fora de partida = a partida anterior acabou:
+		-- zera a bolsa pra proxima comecar do zero
+		if estado.emPartida then
+			estado.semPartidaDesde = nil
+			estado.bolsaZerada = false
+		else
+			if estado.semPartidaDesde == nil then
+				estado.semPartidaDesde = os.clock()
+			end
+			if not estado.bolsaZerada
+				and (os.clock() - estado.semPartidaDesde) >= (CONFIG.tempoLobby or 5) then
+				zerarBolsa()
+				estado.bolsaZerada = true
+				log("fora de partida: bolsa zerada (a proxima comeca do zero)")
+			end
+		end
+
+		if murder then
+			aplicarDestaque(murder)
+
+			local mhrp = murder.Character and murder.Character:FindFirstChild("HumanoidRootPart")
+			local _, _, hrp = getRig()
+			if mhrp and hrp then
+				local delta = hrp.Position - mhrp.Position
+				estado.dist = delta.Magnitude
+				estado.distVertical = math.abs(delta.Y)
+				-- murder no andar de baixo/cima NAO conta como perto
+				estado.mesmaAltura = estado.distVertical <= (CONFIG.alturaPerigo or 12)
+				estado.temVisao = temVisaoDoMurder(hrp, murder)
+			else
+				estado.dist = math.huge
+				estado.distVertical = math.huge
+				estado.mesmaAltura = false
+				estado.temVisao = false
+			end
+		else
+			limparDestaque()
+			estado.dist = math.huge
+			estado.distVertical = math.huge
+			estado.mesmaAltura = false
+			estado.temVisao = false
+		end
+
+		task.wait(0.15)
+	end
+end
+
+--=============================================================================
+-- 16) LOOP PRINCIPAL
+--=============================================================================
+local function loopPrincipal()
+	while estado.ativo do
+		local _, hum, hrp = getRig()
+
+		if not hrp then
+			estado.situacao = "sem personagem (morto/lobby)"
+			task.wait(0.4)
+		elseif estado.resetando then
+			task.wait(0.2)
+		else
+			local perto = perigoAgora()
+
+			if perto then
+				-- PERIGO: sai disparado e, se continuar perto, repete a fuga
+				estado.ultimoPerigo = os.clock()
+				fugir(estado.murder)
+			elseif estado.farmLigado then
+				if estado.souMurder and bolsaCheia() then
+					-- murder com a bolsa cheia: NAO reseta (regra), entao fica
+					-- estatico ate a partida acabar
+					estado.semMoedaDesde = os.clock()
+					if not estado.travado then
+						travarEm(hrp.CFrame)
+					end
+					estado.situacao = "bolsa cheia (murder) - estatico, sem reset"
+				else
+					passoFarm(hum, hrp)
+				end
+			else
+				if estado.guarda and CONFIG.estatico and estado.emPartida then
+					-- em partida pode travar: e a "base estatica" de verdade
+					if not estado.travado then
+						travarEm(hrp.CFrame)
+					end
+					estado.situacao = "estatico (farm desligado)"
+				else
+					-- no lobby NAO trava: senao o servidor nao te teleporta
+					-- pro mapa quando a partida comeca
+					garantirControleNormal(hum)
+					if not estado.guarda and not estado.farmLigado then
+						estado.situacao = "livre (tudo desligado)"
+					else
+						estado.situacao = "lobby/intermission - esperando a partida"
+					end
+				end
+			end
+		end
+
+		task.wait(0.1)
+	end
+end
+
+--=============================================================================
+-- 17) LIGAR / DESLIGAR / UI
+--=============================================================================
+local function refresh()
+	if not Ui.frame then
+		return
+	end
+
+	local noMapa = contarMoedasBoas()
+
+	if Ui.status then
+		Ui.status.Text = estado.situacao
+		if estado.resetando or estado.fugindo then
+			Ui.status.TextColor3 = VERMELHO
+		elseif estado.travado then
+			Ui.status.TextColor3 = VERDE
+		elseif estado.farmLigado then
+			Ui.status.TextColor3 = LARANJA
+		else
+			Ui.status.TextColor3 = TEXT_DIM
+		end
+	end
+
+	if Ui.info then
+		local cap = (CONFIG.capacidadeBolsa or 0) > 0
+			and tostring(CONFIG.capacidadeBolsa)
+			or "inf"
+
+		local murderTxt = "nenhum"
+		if estado.murder then
+			if estado.dist and estado.dist < math.huge then
+				murderTxt = string.format("%s - %d studs", estado.murder.Name, math.floor(estado.dist + 0.5))
+			else
+				murderTxt = estado.murder.Name
+			end
+			if not estado.mesmaAltura then
+				murderTxt = murderTxt .. " (outro andar)"
+			elseif not estado.temVisao then
+				murderTxt = murderTxt .. " (parede)"
+			end
+		elseif estado.souMurder then
+			murderTxt = "VOCE (nao reseta)"
+		end
+
+		local linha1 = string.format("mapa: %d   bolsa: %d/%s", noMapa,
+			math.floor(valorBolsa() + 0.5), cap)
+		if estado.jogo ~= nil then
+			linha1 = linha1 .. string.format("   jogo: %d", math.floor(estado.jogo + 0.5))
+		end
+
+		Ui.info.Text = linha1
+			.. "\nfarm: " .. (estado.farmLigado and "ON" or "off")
+			.. "   guarda: " .. (estado.guarda and "ON" or "off")
+			.. "   partida: " .. (estado.emPartida and "SIM" or "NAO")
+			.. "\nmurder: " .. murderTxt
+
+		if estado.souMurder then
+			Ui.info.TextColor3 = LARANJA
+		elseif estado.murder and estado.dist <= CONFIG.distanciaPerigo then
+			Ui.info.TextColor3 = VERMELHO
+		elseif estado.murder and estado.dist <= CONFIG.distanciaPerigo * 2 then
+			Ui.info.TextColor3 = LARANJA
+		else
+			Ui.info.TextColor3 = NEON
+		end
+	end
+
+	if Ui.velocidade then
+		Ui.velocidade.Text = string.format("%d studs/s", math.floor(CONFIG.velocidade + 0.5))
+	end
+
+	if Ui.bFarm then
+		if estado.farmLigado then
+			Ui.bFarm.Text = "AUTO FARM: DESLIGAR"
+			Ui.bFarm.BackgroundColor3 = VERMELHO
+			Ui.bFarm.TextColor3 = TEXT
+		else
+			Ui.bFarm.Text = "AUTO FARM: LIGAR"
+			Ui.bFarm.BackgroundColor3 = VERDE
+			Ui.bFarm.TextColor3 = Color3.fromRGB(8, 30, 22)
+		end
+	end
+
+	if Ui.bGuarda then
+		if estado.guarda then
+			Ui.bGuarda.Text = "GUARDA: DESLIGAR"
+			Ui.bGuarda.BackgroundColor3 = VERMELHO
+			Ui.bGuarda.TextColor3 = TEXT
+		else
+			Ui.bGuarda.Text = "GUARDA: LIGAR"
+			Ui.bGuarda.BackgroundColor3 = NEON
+			Ui.bGuarda.TextColor3 = Color3.fromRGB(8, 30, 22)
+		end
+	end
+
+	if Ui.bolha then
+		if estado.farmLigado then
+			Ui.bolha.BackgroundColor3 = VERDE
+		elseif estado.guarda then
+			Ui.bolha.BackgroundColor3 = NEON
+		else
+			Ui.bolha.BackgroundColor3 = CINZA
+		end
+	end
+end
+
+local function ligarFarm()
+	if estado.farmLigado then
+		return
+	end
+
+	local _, hum, hrp = getRig()
+	if not hrp then
+		aviso("Farm", "Seu personagem ainda nao nasceu.", 4)
+		return
+	end
+
+	estado.farmLigado = true
+	estado.semMoedaDesde = os.clock()
+	estado.situacao = "farm ligado"
+
+	soltarTrava()
+	estado.noclipLigado = CONFIG.usarNoclip
+	prepararVoo(hum, hrp)
+
+	refresh()
+end
+
+local function desligarFarm()
+	if not estado.farmLigado then
+		return
+	end
+
+	estado.farmLigado = false
+	estado.alvo = nil
+	limparMarca()
+	estado.situacao = "farm desligado"
+	refresh()
+end
+
+local function ligarGuarda()
+	estado.guarda = true
+	refresh()
+end
+
+local function desligarGuarda()
+	estado.guarda = false
+	limparDestaque()
+
+	-- se o farm nao manda no corpo, devolve o controle
+	if not estado.farmLigado then
+		soltarControle()
+		estado.situacao = "guarda desligada"
+	end
+
+	refresh()
+end
+
+--=============================================================================
+-- 18) CONSTRUCAO DA INTERFACE
+--=============================================================================
+local LARGURA = 244
+local ALTURA  = 306
+
+local function criar(classe, props, parent)
+	local inst = Instance.new(classe)
+	for k, v in pairs(props) do
+		if k ~= "Parent" then
+			inst[k] = v
+		end
+	end
+	if parent then
+		inst.Parent = parent
+	end
+	return inst
+end
+
+local function canto(inst, raio)
+	safe(function()
+		criar("UICorner", { CornerRadius = UDim.new(0, raio or 8) }, inst)
+	end)
+end
+
+local function contorno(inst)
+	safe(function()
+		criar("UIStroke", { Color = Color3.fromRGB(52, 52, 66), Thickness = 1 }, inst)
+	end)
+end
+
+local function montar(gui)
+	local pai = nil
+	if type(gethui) == "function" then
+		pai = safe(gethui)
+	end
+	if not pai then
+		pai = safe(function()
+			return game:GetService("CoreGui")
+		end)
+	end
+	local ok = false
+	if pai then
+		ok = pcall(function()
+			gui.Parent = pai
+		end)
+	end
+	if not ok or not gui.Parent then
+		gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+	end
+end
+
+local function arrastavel(frame, alca)
+	local arrastando = false
+	local posInicial, inputInicial = nil, nil
+
+	alca.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			arrastando = true
+			inputInicial = input.Position
+			posInicial = frame.Position
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not arrastando then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - inputInicial
+			local cam = Workspace.CurrentCamera
+			local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+			local nx = math.clamp(posInicial.X.Offset + delta.X, -(LARGURA - 60), vp.X - 60)
+			local ny = math.clamp(posInicial.Y.Offset + delta.Y, 0, vp.Y - 40)
+			frame.Position = UDim2.new(posInicial.X.Scale, nx, posInicial.Y.Scale, ny)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			arrastando = false
+		end
+	end)
+end
+
+local function mudarVisivel(visivel)
+	if not Ui.frame then
+		return
+	end
+	Ui.frame.Visible = visivel
+	if Ui.bolha then
+		Ui.bolha.Visible = not visivel
+	end
+end
+
+local function construir()
+	local screen = criar("ScreenGui", {
+		Name = "FarmGuarda",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 999,
+	})
+	montar(screen)
+	Ui.screen = screen
+
+	local bolha = criar("TextButton", {
+		Name = "Bolha",
+		Text = "FG",
+		Size = UDim2.new(0, 46, 0, 46),
+		Position = UDim2.new(0, 24, 0.3, 0),
+		BackgroundColor3 = CINZA,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		TextSize = 14,
+		TextColor3 = TEXT,
+		Visible = false,
+	}, screen)
+	canto(bolha, 23)
+	contorno(bolha)
+	Ui.bolha = bolha
+	bolha.MouseButton1Click:Connect(function()
+		mudarVisivel(true)
+	end)
+
+	local frame = criar("Frame", {
+		Name = "Painel",
+		Size = UDim2.new(0, LARGURA, 0, ALTURA),
+		Position = UDim2.new(0, 24, 0.25, 0),
+		BackgroundColor3 = BG,
+		BorderSizePixel = 0,
+		Active = true,
+	}, screen)
+	canto(frame, 12)
+	contorno(frame)
+	Ui.frame = frame
+
+	local barra = criar("Frame", {
+		Size = UDim2.new(1, 0, 0, 34),
+		BackgroundColor3 = BG2,
+		BorderSizePixel = 0,
+	}, frame)
+	canto(barra, 12)
+	criar("Frame", {
+		Size = UDim2.new(1, 0, 0, 14),
+		Position = UDim2.new(0, 0, 1, -14),
+		BackgroundColor3 = BG2,
+		BorderSizePixel = 0,
+	}, barra)
+
+	criar("TextLabel", {
+		Text = "FARM + GUARDA",
+		Size = UDim2.new(1, -80, 1, 0),
+		Position = UDim2.new(0, 12, 0, 0),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 13,
+		TextColor3 = NEON,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, barra)
+
+	local fechar = criar("TextButton", {
+		Text = "X",
+		Size = UDim2.new(0, 26, 0, 22),
+		Position = UDim2.new(1, -32, 0.5, -11),
+		BackgroundColor3 = Color3.fromRGB(60, 40, 46),
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = Color3.fromRGB(255, 170, 170),
+	}, barra)
+	canto(fechar, 6)
+	fechar.MouseButton1Click:Connect(function()
+		mudarVisivel(false)
+	end)
+
+	arrastavel(frame, barra)
+
+	local content = criar("Frame", {
+		Size = UDim2.new(1, 0, 1, -34),
+		Position = UDim2.new(0, 0, 0, 34),
+		BackgroundTransparency = 1,
+	}, frame)
+
+	Ui.status = criar("TextLabel", {
+		Text = "carregando",
+		Size = UDim2.new(0, 224, 0, 16),
+		Position = UDim2.new(0, 10, 0, 4),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = TEXT_DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, content)
+
+	Ui.info = criar("TextLabel", {
+		Text = "no mapa: 0",
+		Size = UDim2.new(0, 224, 0, 52),
+		Position = UDim2.new(0, 10, 0, 22),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 10,
+		TextColor3 = NEON,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextWrapped = true,
+	}, content)
+
+	criar("TextLabel", {
+		Text = "VELOCIDADE (studs/s)",
+		Size = UDim2.new(0, 224, 0, 12),
+		Position = UDim2.new(0, 10, 0, 78),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 10,
+		TextColor3 = TEXT_DIM,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, content)
+
+	local function botao(texto, x, y, w, h, cor)
+		local b = criar("TextButton", {
+			Text = texto,
+			Size = UDim2.new(0, w, 0, h),
+			Position = UDim2.new(0, x, 0, y),
+			BackgroundColor3 = cor or CINZA,
+			BorderSizePixel = 0,
+			Font = Enum.Font.GothamBold,
+			TextSize = 13,
+			TextColor3 = TEXT,
+		}, content)
+		canto(b, 8)
+		return b
+	end
+
+	local bMenos = botao("-", 10, 92, 34, 26)
+	local bMais  = botao("+", 200, 92, 34, 26)
+
+	Ui.velocidade = criar("TextLabel", {
+		Text = "30 studs/s",
+		Size = UDim2.new(0, 146, 0, 26),
+		Position = UDim2.new(0, 49, 0, 92),
+		BackgroundColor3 = BG2,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 12,
+		TextColor3 = TEXT,
+	}, content)
+	canto(Ui.velocidade, 8)
+
+	Ui.bFarm = botao("AUTO FARM: LIGAR", 10, 122, 224, 44, VERDE)
+	Ui.bFarm.TextColor3 = Color3.fromRGB(8, 30, 22)
+
+	Ui.bGuarda = botao("GUARDA: DESLIGAR", 10, 170, 224, 36, VERMELHO)
+
+	local bResetar = botao("RESETAR BOLSA", 10, 210, 224, 34)
+
+	criar("TextLabel", {
+		Text = "Celular: use os botoes  -  PC: RightShift / F2 / F3",
+		Size = UDim2.new(0, 224, 0, 14),
+		Position = UDim2.new(0, 10, 0, 250),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 9,
+		TextColor3 = Color3.fromRGB(110, 110, 128),
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, content)
+
+	Ui.bFarm.MouseButton1Click:Connect(function()
+		if estado.farmLigado then
+			desligarFarm()
+		else
+			ligarFarm()
+		end
+		refresh()
+	end)
+
+	Ui.bGuarda.MouseButton1Click:Connect(function()
+		if estado.guarda then
+			desligarGuarda()
+		else
+			ligarGuarda()
+		end
+		refresh()
+	end)
+
+	bMenos.MouseButton1Click:Connect(function()
+		CONFIG.velocidade = math.clamp(CONFIG.velocidade - 5, 12, 60)
+		refresh()
+	end)
+
+	bMais.MouseButton1Click:Connect(function()
+		CONFIG.velocidade = math.clamp(CONFIG.velocidade + 5, 12, 60)
+		refresh()
+	end)
+
+	bResetar.MouseButton1Click:Connect(function()
+		task.spawn(function()
+			resetar("manual")
+		end)
+		refresh()
+	end)
+
+	refresh()
+
+	task.spawn(function()
+		while Ui.screen and Ui.screen.Parent do
+			refresh()
+			task.wait(0.4)
+		end
+	end)
+end
+
+--=============================================================================
+-- 19) ANTI-AFK, ATALHOS, RENASCIMENTO E INICIO
+--=============================================================================
+if CONFIG.antiAfk and VirtualUser then
+	pcall(function()
+		LocalPlayer.Idled:Connect(function()
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new())
+			end)
+		end)
+	end)
+end
+
+UserInputService.InputBegan:Connect(function(input, processado)
+	if processado then
+		return
+	end
+
+	if input.KeyCode == CONFIG.teclaPainel then
+		if Ui.frame and Ui.frame.Visible then
+			mudarVisivel(false)
+		else
+			mudarVisivel(true)
+		end
+	elseif input.KeyCode == CONFIG.teclaFarm then
+		if estado.farmLigado then
+			desligarFarm()
+		else
+			ligarFarm()
+		end
+		refresh()
+	elseif input.KeyCode == CONFIG.teclaGuarda then
+		if estado.guarda then
+			desligarGuarda()
+		else
+			ligarGuarda()
+		end
+		refresh()
+	end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(1)
+
+	-- cada vida/partida comeca com a bolsa vazia (morreu, mataram, partida
+	-- acabou ou resetou = bolsa nova). O reset de verdade so acontece quando
+	-- a contagem chega em CONFIG.capacidadeBolsa.
+	if CONFIG.zerarBolsaAoRenascer then
+		estado.moedas = 0
+		estado.jogoBase = nil
+		estado.jogoMudou = false
+	end
+
+	limparMarca()
+	limparDestaque()
+	soltarTrava()
+	estado.noclipLigado = false
+	restaurarColisao()
+	estado.semMoedaDesde = os.clock()
+
+	refresh()
+end)
+
+-- varre o que ja estava no mapa
+do
+	local ok = pcall(function()
+		for _, inst in ipairs(Workspace:GetDescendants()) do
+			if inst:IsA("BasePart") then
+				registrarMoeda(inst)
+			end
+		end
+	end)
+	if not ok then
+		print("[Farm+Guarda] varredura inicial falhou (segue escutando moeda nova)")
+	end
+end
+
+-- moeda nascendo daqui pra frente
+pcall(function()
+	Workspace.DescendantAdded:Connect(function(inst)
+		if inst:IsA("BasePart") then
+			registrarMoeda(inst)
+		end
+	end)
+end)
+
+if CONFIG.mostrarPainel then
+	construir()
+end
+
+refresh()
+
+-- threads de trabalho (o farm NAO depende da deteccao do contador)
+task.spawn(function()
+	while estado.ativo do
+		verificarPendentes()
+		task.wait(0.15)
+	end
+end)
+task.spawn(function()
+	while estado.ativo do
+		atualizarContadorJogo()
+		task.wait(0.5)
+	end
+end)
+task.spawn(monitorMurder)
+task.spawn(loopPrincipal)
+
+-- deteccao do contador em thread separada: se o require do perfil demorar ou
+-- travar, o farm continua funcionando normalmente
+task.spawn(function()
+	contadorJogo = acharContadorJogo()
+	if contadorJogo then
+		print("[Farm+Guarda] contador do jogo: " .. tostring(contadorJogo.tipo)
+			.. " " .. tostring(contadorJogo.caminho or contadorJogo.nome or ""))
+	else
+		print("[Farm+Guarda] contador do jogo nao encontrado - usando a contagem do script")
+	end
+	hookarContadorPorRemote()
+	farejarRemotes()
+end)
+
+if type(getgenv) == "function" then
+	pcall(function()
+		getgenv().MM2FarmGuarda = {
+			config    = CONFIG,
+			estado    = estado,
+			ligarFarm = ligarFarm,
+			pararFarm = desligarFarm,
+			ligarGuarda = ligarGuarda,
+			desligarGuarda = desligarGuarda,
+			resetar   = resetar,
+			desligar  = function()
+				estado.ativo = false
+			end,
+		}
+	end)
+end
+
+print("[Farm+Guarda] carregado - moedas visiveis agora: " .. tostring(#moedas))
+print("[Farm+Guarda] botoes na tela: AUTO FARM / GUARDA  (PC: RightShift / F2 / F3)")
+aviso("Farm + Guarda", "Use os botoes AUTO FARM e GUARDA na tela.", 5)
